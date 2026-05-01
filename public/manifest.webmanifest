@@ -1,0 +1,18 @@
+{
+  "name": "Street Team",
+  "short_name": "Street Team",
+  "description": "Find shows. Share shows. Earn rewards.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#050505",
+  "theme_color": "#050505",
+  "icons": [
+    {
+      "src": "assets/icon-1024.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
