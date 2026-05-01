@@ -345,7 +345,7 @@ function App() {
         <div className="logoWrap">
           <img
   className="brandHeaderLogo"
-  src="/assets/header-logo.png"
+  src={`${import.meta.env.BASE_URL}assets/header-logo.png`}
   alt="Street Team"
 />
           <div className="tagline">Find shows. Share shows. Earn rewards.</div>
