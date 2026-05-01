@@ -1,0 +1,686 @@
+:root {
+  --bg: #08080c;
+  --card: #15151f;
+  --card2: #1f1f2d;
+  --text: #ffffff;
+  --muted: #b8b8c8;
+  --line: rgba(255, 255, 255, 0.12);
+  --green: #b6ff3b;
+  --pink: #ff3df2;
+  --purple: #8d5cff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at top left, rgba(182, 255, 59, 0.14), transparent 28%),
+    radial-gradient(circle at top right, rgba(255, 61, 242, 0.12), transparent 30%),
+    var(--bg);
+  color: var(--text);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+button {
+  font-family: inherit;
+}
+
+.app {
+  min-height: 100vh;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba(8, 8, 12, 0.92);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line);
+  padding: 18px 16px 12px;
+}
+
+.logoWrap {
+  text-align: center;
+}
+
+.logoText {
+  display: inline-block;
+  font-size: 30px;
+  font-weight: 1000;
+  letter-spacing: 1px;
+  color: var(--text);
+  text-shadow:
+    2px 2px 0 var(--pink),
+    -2px -2px 0 var(--green);
+  transform: rotate(-1deg);
+}
+
+.tagline {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  max-width: 520px;
+  margin: 16px auto 0;
+}
+
+.tab {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+  padding: 11px 12px;
+  border-radius: 999px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.tab.active {
+  background: var(--green);
+  color: #111;
+  border-color: var(--green);
+}
+
+.content {
+  width: min(980px, 100%);
+  margin: 0 auto;
+  padding: 18px 16px 90px;
+}
+
+.heroCard,
+.panel {
+  background: linear-gradient(135deg, rgba(31, 31, 45, 0.98), rgba(12, 12, 18, 0.98));
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  padding: 22px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+}
+
+.heroCard {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: center;
+}
+
+.eyebrow {
+  color: var(--green);
+  text-transform: uppercase;
+  letter-spacing: 1.4px;
+  font-size: 12px;
+  font-weight: 900;
+  margin: 0 0 8px;
+}
+
+h1 {
+  font-size: clamp(30px, 6vw, 56px);
+  line-height: 0.95;
+  margin: 0 0 12px;
+}
+
+h2 {
+  margin: 0;
+  font-size: 24px;
+}
+
+h3 {
+  margin: 10px 0 6px;
+  font-size: 22px;
+}
+
+p {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.pointsBox {
+  min-width: 125px;
+  background: #0f1017;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 16px;
+  text-align: center;
+}
+
+.pointsBox span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.pointsBox strong {
+  display: block;
+  color: var(--green);
+  font-size: 42px;
+  margin-top: 6px;
+}
+
+.sectionHeader {
+  margin: 28px 0 14px;
+}
+
+.sectionHeader p {
+  margin: 6px 0 0;
+}
+
+.eventList {
+  display: grid;
+  gap: 14px;
+}
+
+.eventCard {
+  display: grid;
+  grid-template-columns: 132px 1fr;
+  gap: 14px;
+  background: rgba(21, 21, 31, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 12px;
+}
+
+.flyerMock {
+  min-height: 150px;
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(182, 255, 59, 0.9), rgba(255, 61, 242, 0.85)),
+    #222;
+  display: grid;
+  place-items: center;
+  color: #111;
+  font-weight: 1000;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  text-align: center;
+}
+
+.eventTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.pill {
+  background: rgba(141, 92, 255, 0.18);
+  color: #d9ccff;
+  border: 1px solid rgba(141, 92, 255, 0.35);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.price {
+  color: var(--green);
+  font-weight: 1000;
+}
+
+.venue,
+.details {
+  margin: 0;
+}
+
+.eventActions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.primaryBtn,
+.secondaryBtn {
+  border: none;
+  border-radius: 999px;
+  padding: 12px 16px;
+  font-weight: 1000;
+  cursor: pointer;
+}
+
+.primaryBtn {
+  background: var(--green);
+  color: #111;
+}
+
+.secondaryBtn {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+
+.wide {
+  width: 100%;
+  margin-top: 18px;
+}
+
+.producerGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.miniCard,
+.rewardCard {
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 16px;
+}
+
+.miniCard strong {
+  display: block;
+  color: var(--green);
+  font-size: 34px;
+}
+
+.miniCard span {
+  color: var(--muted);
+  font-weight: 800;
+  font-size: 13px;
+}
+
+.rewardCard {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-top: 14px;
+}
+
+.rewardCard h3 {
+  margin-top: 0;
+}
+
+.rewardCard p {
+  margin-bottom: 0;
+}
+
+@media (max-width: 640px) {
+  .heroCard {
+    display: block;
+  }
+
+  .pointsBox {
+    margin-top: 16px;
+  }
+
+  .eventCard {
+    grid-template-columns: 1fr;
+  }
+
+  .flyerMock {
+    min-height: 110px;
+  }
+
+  .producerGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .rewardCard {
+    display: block;
+  }
+
+  .rewardCard button {
+    margin-top: 12px;
+  }
+}.createForm {
+  margin-top: 22px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 16px;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+.formField {
+  display: grid;
+  gap: 7px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.fullSpan {
+  grid-column: 1 / -1;
+}
+
+.formField input,
+.formField select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #0f1017;
+  color: var(--text);
+  padding: 13px 14px;
+  outline: none;
+}
+
+.formField input:focus,
+.formField select:focus {
+  border-color: var(--green);
+}
+
+.helperText {
+  margin: 12px 0 0;
+  font-size: 13px;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+}.eventDetail {
+  background: linear-gradient(135deg, rgba(31, 31, 45, 0.98), rgba(12, 12, 18, 0.98));
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  padding: 18px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+}
+
+.backBtn {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-weight: 900;
+  cursor: pointer;
+  margin-bottom: 16px;
+}
+
+.detailFlyer {
+  min-height: 280px;
+  border-radius: 24px;
+  background:
+    linear-gradient(135deg, rgba(182, 255, 59, 0.9), rgba(255, 61, 242, 0.85)),
+    #222;
+  display: grid;
+  place-items: center;
+  color: #111;
+  font-size: 42px;
+  font-weight: 1000;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  text-align: center;
+  margin-bottom: 18px;
+}
+
+.detailBody h1 {
+  margin-top: 16px;
+}
+
+.detailList {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.detailList div {
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 14px;
+}
+
+.detailList span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  font-weight: 900;
+  letter-spacing: 0.8px;
+  margin-bottom: 6px;
+}
+
+.detailList strong {
+  display: block;
+  color: var(--text);
+  font-size: 15px;
+}
+
+@media (max-width: 760px) {
+  .detailList {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .detailFlyer {
+    min-height: 210px;
+    font-size: 30px;
+  }
+}
+
+@media (max-width: 460px) {
+  .detailList {
+    grid-template-columns: 1fr;
+  }
+}.flyerMock.hasImage,
+.detailFlyer.hasImage {
+  background: #111;
+  overflow: hidden;
+}
+
+.flyerMock img,
+.detailFlyer img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.flyerPreview {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 14px;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 12px;
+}
+
+.flyerPreview img {
+  width: 120px;
+  height: 150px;
+  object-fit: cover;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+}
+
+.flyerPreview strong {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--text);
+}
+
+.formField input[type="file"] {
+  padding: 10px;
+}
+
+@media (max-width: 520px) {
+  .flyerPreview {
+    grid-template-columns: 1fr;
+  }
+
+  .flyerPreview img {
+    width: 100%;
+    height: 220px;
+  }
+}/* Street Team real brand pass */
+
+:root {
+  --bg: #050505;
+  --card: #111116;
+  --card2: #1a1a20;
+  --text: #f7f1e8;
+  --muted: #c8c0b8;
+  --line: rgba(255, 255, 255, 0.14);
+  --green: #e32227;
+  --pink: #e32227;
+  --purple: #e32227;
+  --red: #e32227;
+  --cream: #f7f1e8;
+}
+
+body {
+  background:
+    radial-gradient(circle at top left, rgba(227, 34, 39, 0.16), transparent 26%),
+    radial-gradient(circle at top right, rgba(227, 34, 39, 0.1), transparent 30%),
+    #050505;
+}
+
+.topbar {
+  background: rgba(5, 5, 5, 0.94);
+}
+
+.brandHeaderLogo {
+  display: block;
+  width: min(360px, 78vw);
+  height: auto;
+  margin: 0 auto;
+  filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.55));
+}
+
+.logoText {
+  display: none;
+}
+
+.tagline {
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.tab.active,
+.primaryBtn {
+  background: var(--red);
+  color: var(--cream);
+  border-color: var(--red);
+}
+
+.primaryBtn:hover,
+.tab.active:hover {
+  filter: brightness(1.08);
+}
+
+.price,
+.pointsBox strong,
+.eyebrow,
+.miniCard strong {
+  color: var(--red);
+}
+
+.pill {
+  background: rgba(227, 34, 39, 0.18);
+  color: var(--cream);
+  border-color: rgba(227, 34, 39, 0.48);
+}
+
+.heroCard,
+.panel,
+.eventDetail,
+.eventCard {
+  background:
+    linear-gradient(135deg, rgba(28, 28, 34, 0.98), rgba(8, 8, 10, 0.98));
+}
+
+.flyerMock,
+.detailFlyer {
+  background:
+    radial-gradient(circle at top left, rgba(247, 241, 232, 0.16), transparent 34%),
+    linear-gradient(135deg, #e32227, #0b0b0d 72%);
+  color: var(--cream);
+}
+
+.flyerMock span,
+.detailFlyer span {
+  color: var(--cream);
+  text-shadow: 3px 3px 0 #000;
+}
+
+.pointsBox {
+  background: #0b0b0d;
+}
+.managerSection {
+  margin-top: 26px;
+}
+
+.smallHeader {
+  margin: 0 0 14px;
+}
+
+.manageList {
+  display: grid;
+  gap: 14px;
+}
+
+.manageCard {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 14px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 12px;
+}
+
+.manageCard .flyerMock {
+  min-height: 135px;
+}
+
+.manageInfo h3 {
+  margin-top: 10px;
+}
+
+.dangerBtn {
+  border: 1px solid rgba(227, 34, 39, 0.7);
+  background: rgba(227, 34, 39, 0.12);
+  color: var(--cream);
+  border-radius: 999px;
+  padding: 12px 16px;
+  font-weight: 1000;
+  cursor: pointer;
+}
+
+.dangerBtn:hover {
+  background: rgba(227, 34, 39, 0.28);
+}
+
+.editForm {
+  margin-top: 16px;
+  background: rgba(0, 0, 0, 0.24);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 14px;
+}
+
+.editTitle {
+  margin: 0 0 14px;
+  color: var(--cream);
+}
+
+@media (max-width: 640px) {
+  .manageCard {
+    grid-template-columns: 1fr;
+  }
+
+  .manageCard .flyerMock {
+    min-height: 180px;
+  }
+}
