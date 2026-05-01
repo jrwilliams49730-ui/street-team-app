@@ -344,10 +344,10 @@ function App() {
       <header className="topbar">
         <div className="logoWrap">
           <img
-            className="brandHeaderLogo"
-            src="/assets/header-logo.png"
-            alt="Street Team"
-          />
+  className="brandHeaderLogo"
+  src="/assets/header-logo.png"
+  alt="Street Team"
+/>
           <div className="tagline">Find shows. Share shows. Earn rewards.</div>
         </div>
 
