@@ -1,47 +1,6 @@
 import { useEffect, useState } from "react";
 import "./App.css";
-
-const starterEvents = [
-  {
-    id: 1,
-    title: "Comedy Night at The Hive",
-    type: "Comedy",
-    venue: "Grand Strand Brewing",
-    city: "Myrtle Beach, SC",
-    date: "Fri, May 10",
-    time: "8:00 PM",
-    price: "$15",
-    points: 25,
-    flyerImage: "",
-    flyerName: "",
-  },
-  {
-    id: 2,
-    title: "Local Band Showcase",
-    type: "Music",
-    venue: "The Backyard Stage",
-    city: "Conway, SC",
-    date: "Sat, May 11",
-    time: "7:30 PM",
-    price: "$10",
-    points: 20,
-    flyerImage: "",
-    flyerName: "",
-  },
-  {
-    id: 3,
-    title: "Buzzed Bee Live",
-    type: "Game Show",
-    venue: "Harry the Hats",
-    city: "Surfside Beach, SC",
-    date: "Sun, May 12",
-    time: "7:00 PM",
-    price: "Free",
-    points: 15,
-    flyerImage: "",
-    flyerName: "",
-  },
-];
+import { supabase } from "./supabaseClient";
 
 const emptyForm = {
   title: "",
@@ -53,6 +12,8 @@ const emptyForm = {
   price: "",
   flyerImage: "",
   flyerName: "",
+  flyerPath: "",
+  flyerFile: null,
 };
 
 const emptyEditForm = {
@@ -65,6 +26,8 @@ const emptyEditForm = {
   price: "",
   flyerImage: "",
   flyerName: "",
+  flyerPath: "",
+  flyerFile: null,
 };
 
 function loadSavedValue(key, fallbackValue) {
@@ -102,6 +65,76 @@ function cleanPriceForEdit(price) {
   return String(price).replace("$", "");
 }
 
+function makeSafeFileName(fileName) {
+  return fileName
+    .toLowerCase()
+    .replace(/[^a-z0-9.]+/g, "-")
+    .replace(/-+/g, "-");
+}
+
+async function uploadFlyerToStorage(file) {
+  if (!file) {
+    return {
+      publicUrl: "",
+      filePath: "",
+      fileName: "",
+    };
+  }
+
+  const safeName = makeSafeFileName(file.name);
+  const filePath = `fliers/${Date.now()}-${safeName}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from("event-fliers")
+    .upload(filePath, file, {
+      cacheControl: "3600",
+      upsert: false,
+    });
+
+  if (uploadError) {
+    throw uploadError;
+  }
+
+  const { data } = supabase.storage
+    .from("event-fliers")
+    .getPublicUrl(filePath);
+
+  return {
+    publicUrl: data.publicUrl,
+    filePath,
+    fileName: file.name,
+  };
+}
+
+async function deleteFlyerFromStorage(filePath) {
+  if (!filePath) return;
+
+  const { error } = await supabase.storage
+    .from("event-fliers")
+    .remove([filePath]);
+
+  if (error) {
+    console.warn("Could not delete old flyer:", error);
+  }
+}
+
+function fromDbEvent(item) {
+  return {
+    id: item.id,
+    title: item.title,
+    type: item.type,
+    venue: item.venue,
+    city: item.city,
+    date: item.event_date,
+    time: item.event_time,
+    price: item.price,
+    points: item.points,
+    flyerImage: item.flyer_image || "",
+    flyerName: item.flyer_name || "",
+    flyerPath: item.flyer_path || "",
+  };
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState("fan");
   const [selectedEvent, setSelectedEvent] = useState(null);
@@ -109,12 +142,13 @@ function App() {
   const [points, setPoints] = useState(() =>
     loadSavedValue("streetTeamPoints", 120)
   );
-  const [events, setEvents] = useState(() =>
-    loadSavedValue("streetTeamEvents", starterEvents)
-  );
+  const [events, setEvents] = useState([]);
   const [totalShares, setTotalShares] = useState(() =>
     loadSavedValue("streetTeamShares", 0)
   );
+
+  const [isLoadingEvents, setIsLoadingEvents] = useState(true);
+  const [eventError, setEventError] = useState("");
 
   const [form, setForm] = useState(emptyForm);
   const [editingEventId, setEditingEventId] = useState(null);
@@ -125,12 +159,32 @@ function App() {
   }, [points]);
 
   useEffect(() => {
-    localStorage.setItem("streetTeamEvents", JSON.stringify(events));
-  }, [events]);
-
-  useEffect(() => {
     localStorage.setItem("streetTeamShares", JSON.stringify(totalShares));
   }, [totalShares]);
+
+  useEffect(() => {
+    loadEventsFromSupabase();
+  }, []);
+
+  async function loadEventsFromSupabase() {
+    setIsLoadingEvents(true);
+    setEventError("");
+
+    const { data, error } = await supabase
+      .from("events")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error(error);
+      setEventError("Could not load events from Supabase.");
+      setIsLoadingEvents(false);
+      return;
+    }
+
+    setEvents(data.map(fromDbEvent));
+    setIsLoadingEvents(false);
+  }
 
   function goToTab(tabName) {
     setSelectedEvent(null);
@@ -170,8 +224,8 @@ function App() {
       return;
     }
 
-    if (file.size > 2 * 1024 * 1024) {
-      alert("For this demo, use a flier image under 2MB. The real app will use cloud storage.");
+    if (file.size > 5 * 1024 * 1024) {
+      alert("Please use a flier image under 5MB.");
       return;
     }
 
@@ -183,12 +237,14 @@ function App() {
           ...currentForm,
           flyerImage: reader.result,
           flyerName: file.name,
+          flyerFile: file,
         }));
       } else {
         setForm((currentForm) => ({
           ...currentForm,
           flyerImage: reader.result,
           flyerName: file.name,
+          flyerFile: file,
         }));
       }
     };
@@ -202,17 +258,21 @@ function App() {
         ...currentForm,
         flyerImage: "",
         flyerName: "",
+        flyerPath: "",
+        flyerFile: null,
       }));
     } else {
       setForm((currentForm) => ({
         ...currentForm,
         flyerImage: "",
         flyerName: "",
+        flyerPath: "",
+        flyerFile: null,
       }));
     }
   }
 
-  function createEvent(event) {
+  async function createEvent(event) {
     event.preventDefault();
 
     if (!form.title || !form.venue || !form.city || !form.date || !form.time) {
@@ -222,25 +282,54 @@ function App() {
 
     const isFree = !form.price || Number(form.price) === 0;
 
-    const newEvent = {
-      id: Date.now(),
+    let uploadedFlyer = {
+      publicUrl: "",
+      filePath: "",
+      fileName: "",
+    };
+
+    try {
+      if (form.flyerFile) {
+        uploadedFlyer = await uploadFlyerToStorage(form.flyerFile);
+      }
+    } catch (error) {
+      console.error(error);
+      alert("Could not upload flier to Supabase Storage.");
+      return;
+    }
+
+    const eventToCreate = {
       title: form.title,
       type: form.type,
       venue: form.venue,
       city: form.city,
-      date: formatDate(form.date),
-      time: formatTime(form.time),
+      event_date: formatDate(form.date),
+      event_time: formatTime(form.time),
       price: isFree ? "Free" : `$${form.price}`,
       points: isFree ? 15 : 25,
-      flyerImage: form.flyerImage,
-      flyerName: form.flyerName,
+      flyer_image: uploadedFlyer.publicUrl,
+      flyer_name: uploadedFlyer.fileName,
+      flyer_path: uploadedFlyer.filePath,
     };
 
-    setEvents((currentEvents) => [newEvent, ...currentEvents]);
+    const { data, error } = await supabase
+      .from("events")
+      .insert(eventToCreate)
+      .select()
+      .single();
+
+    if (error) {
+      console.error(error);
+      await deleteFlyerFromStorage(uploadedFlyer.filePath);
+      alert("Could not create event in Supabase.");
+      return;
+    }
+
+    setEvents((currentEvents) => [fromDbEvent(data), ...currentEvents]);
     setForm(emptyForm);
     setSelectedEvent(null);
     setActiveTab("fan");
-    alert("Event created. It is now live on the fan side.");
+    alert("Event created with Supabase Storage flier.");
   }
 
   function startEdit(event) {
@@ -255,6 +344,8 @@ function App() {
       price: cleanPriceForEdit(event.price),
       flyerImage: event.flyerImage || "",
       flyerName: event.flyerName || "",
+      flyerPath: event.flyerPath || "",
+      flyerFile: null,
     });
   }
 
@@ -263,7 +354,7 @@ function App() {
     setEditForm(emptyEditForm);
   }
 
-  function saveEventChanges(event) {
+  async function saveEventChanges(event) {
     event.preventDefault();
 
     if (
@@ -277,39 +368,101 @@ function App() {
       return;
     }
 
+    const originalEvent = events.find((item) => item.id === editingEventId);
     const isFree = !editForm.price || Number(editForm.price) === 0;
+
+    let finalFlyerImage = editForm.flyerImage;
+    let finalFlyerName = editForm.flyerName;
+    let finalFlyerPath = editForm.flyerPath;
+
+    let newlyUploadedPath = "";
+
+    try {
+      if (editForm.flyerFile) {
+        const uploadedFlyer = await uploadFlyerToStorage(editForm.flyerFile);
+
+        finalFlyerImage = uploadedFlyer.publicUrl;
+        finalFlyerName = uploadedFlyer.fileName;
+        finalFlyerPath = uploadedFlyer.filePath;
+        newlyUploadedPath = uploadedFlyer.filePath;
+      }
+
+      if (!editForm.flyerImage) {
+        finalFlyerImage = "";
+        finalFlyerName = "";
+        finalFlyerPath = "";
+      }
+    } catch (error) {
+      console.error(error);
+      alert("Could not update flier in Supabase Storage.");
+      return;
+    }
+
+    const updatedEvent = {
+      title: editForm.title,
+      type: editForm.type,
+      venue: editForm.venue,
+      city: editForm.city,
+      event_date: editForm.date,
+      event_time: editForm.time,
+      price: isFree ? "Free" : `$${editForm.price}`,
+      points: isFree ? 15 : 25,
+      flyer_image: finalFlyerImage,
+      flyer_name: finalFlyerName,
+      flyer_path: finalFlyerPath,
+    };
+
+    const { data, error } = await supabase
+      .from("events")
+      .update(updatedEvent)
+      .eq("id", editingEventId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error(error);
+      await deleteFlyerFromStorage(newlyUploadedPath);
+      alert("Could not update event in Supabase.");
+      return;
+    }
+
+    if (originalEvent?.flyerPath && originalEvent.flyerPath !== finalFlyerPath) {
+      await deleteFlyerFromStorage(originalEvent.flyerPath);
+    }
+
+    const updatedAppEvent = fromDbEvent(data);
 
     setEvents((currentEvents) =>
       currentEvents.map((item) =>
-        item.id === editingEventId
-          ? {
-              ...item,
-              title: editForm.title,
-              type: editForm.type,
-              venue: editForm.venue,
-              city: editForm.city,
-              date: editForm.date,
-              time: editForm.time,
-              price: isFree ? "Free" : `$${editForm.price}`,
-              points: isFree ? 15 : 25,
-              flyerImage: editForm.flyerImage,
-              flyerName: editForm.flyerName,
-            }
-          : item
+        item.id === editingEventId ? updatedAppEvent : item
       )
     );
+
+    if (selectedEvent?.id === editingEventId) {
+      setSelectedEvent(updatedAppEvent);
+    }
 
     cancelEdit();
     alert("Event updated.");
   }
 
-  function deleteEvent(eventId) {
+  async function deleteEvent(eventId) {
     const eventToDelete = events.find((event) => event.id === eventId);
     const confirmed = window.confirm(
       `Delete "${eventToDelete?.title || "this event"}"?`
     );
 
     if (!confirmed) return;
+
+    const { error } = await supabase.from("events").delete().eq("id", eventId);
+
+    if (error) {
+      console.error(error);
+      alert("Could not delete event from Supabase.");
+      return;
+    }
+
+    await deleteFlyerFromStorage(eventToDelete?.flyerPath);
 
     setEvents((currentEvents) =>
       currentEvents.filter((event) => event.id !== eventId)
@@ -344,16 +497,20 @@ function App() {
       <header className="topbar">
         <div className="logoWrap">
           <img
-  className="brandHeaderLogo"
-  src={`${import.meta.env.BASE_URL}assets/header-logo.png`}
-  alt="Street Team"
-/>
+            className="brandHeaderLogo"
+            src={`${import.meta.env.BASE_URL}assets/header-logo.png`}
+            alt="Street Team"
+          />
           <div className="tagline">Find shows. Share shows. Earn rewards.</div>
         </div>
 
         <nav className="tabs">
           <button
-            className={activeTab === "fan" || activeTab === "event" ? "tab active" : "tab"}
+            className={
+              activeTab === "fan" || activeTab === "event"
+                ? "tab active"
+                : "tab"
+            }
             onClick={() => goToTab("fan")}
           >
             Fan
@@ -397,6 +554,15 @@ function App() {
               <p>Share events to earn points toward digital gift cards.</p>
             </section>
 
+            {isLoadingEvents && <p>Loading events...</p>}
+            {eventError && <p className="errorText">{eventError}</p>}
+            {!isLoadingEvents && !eventError && events.length === 0 && (
+              <section className="emptyState">
+                <h3>No events yet.</h3>
+                <p>Go to Producer and create the first live Supabase event.</p>
+              </section>
+            )}
+
             <div className="eventList">
               {events.map((event) => (
                 <article className="eventCard" key={event.id}>
@@ -415,7 +581,10 @@ function App() {
                     </p>
 
                     <div className="eventActions">
-                      <button className="primaryBtn" onClick={() => openEvent(event)}>
+                      <button
+                        className="primaryBtn"
+                        onClick={() => openEvent(event)}
+                      >
                         View Event
                       </button>
                       <button
@@ -490,8 +659,8 @@ function App() {
             <p className="eyebrow">Producer Dashboard</p>
             <h1>Manage your events.</h1>
             <p>
-              Create, edit, delete, and update fliers. This is where producers
-              control what fans see.
+              Create, edit, delete, and update fliers. Events now come from
+              Supabase, and fliers are stored in Supabase Storage.
             </p>
 
             <div className="producerGrid">
@@ -512,8 +681,10 @@ function App() {
             <section className="managerSection">
               <div className="sectionHeader smallHeader">
                 <h2>Your Events</h2>
-                <p>Edit test events, fix typos, replace fliers, or delete old ones.</p>
+                <p>Edit events, fix typos, replace fliers, or delete old ones.</p>
               </div>
+
+              {isLoadingEvents && <p>Loading events...</p>}
 
               <div className="manageList">
                 {events.map((event) => (
@@ -651,7 +822,10 @@ function App() {
 
                           {editForm.flyerImage && (
                             <div className="flyerPreview">
-                              <img src={editForm.flyerImage} alt="Flier preview" />
+                              <img
+                                src={editForm.flyerImage}
+                                alt="Flier preview"
+                              />
                               <div>
                                 <strong>
                                   {editForm.flyerName || "Current flier"}
@@ -690,7 +864,7 @@ function App() {
             <form className="createForm" onSubmit={createEvent}>
               <div className="sectionHeader smallHeader">
                 <h2>Create New Event</h2>
-                <p>Add a new show to the fan side.</p>
+                <p>Add a new show to Supabase.</p>
               </div>
 
               <div className="formGrid">
@@ -781,7 +955,11 @@ function App() {
                   <img src={form.flyerImage} alt="Flier preview" />
                   <div>
                     <strong>{form.flyerName}</strong>
-                    <button className="secondaryBtn" type="button" onClick={removeFlyer}>
+                    <button
+                      className="secondaryBtn"
+                      type="button"
+                      onClick={removeFlyer}
+                    >
                       Remove Flier
                     </button>
                   </div>
@@ -793,8 +971,8 @@ function App() {
               </button>
 
               <p className="helperText">
-                This demo saves small fliers locally. The real app will use
-                Supabase storage so producers can upload full-size images.
+                This version saves event records to Supabase and stores fliers in
+                Supabase Storage.
               </p>
             </form>
           </section>

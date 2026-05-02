@@ -684,3 +684,15 @@ body {
     min-height: 180px;
   }
 }
+.emptyState,
+.errorText {
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 18px;
+}
+
+.errorText {
+  color: #ff6b6b;
+  font-weight: 900;
+}
