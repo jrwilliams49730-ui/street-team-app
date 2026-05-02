@@ -132,12 +132,20 @@ function fromDbEvent(item) {
     flyerImage: item.flyer_image || "",
     flyerName: item.flyer_name || "",
     flyerPath: item.flyer_path || "",
+    ownerId: item.owner_id || null,
   };
 }
 
 function App() {
   const [activeTab, setActiveTab] = useState("fan");
   const [selectedEvent, setSelectedEvent] = useState(null);
+
+  const [user, setUser] = useState(null);
+  const [authMode, setAuthMode] = useState("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
 
   const [points, setPoints] = useState(() =>
     loadSavedValue("streetTeamPoints", 120)
@@ -153,6 +161,27 @@ function App() {
   const [form, setForm] = useState(emptyForm);
   const [editingEventId, setEditingEventId] = useState(null);
   const [editForm, setEditForm] = useState(emptyEditForm);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (isMounted) {
+        setUser(data.session?.user ?? null);
+      }
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setUser(session?.user ?? null);
+      }
+    );
+
+    return () => {
+      isMounted = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("streetTeamPoints", JSON.stringify(points));
@@ -200,6 +229,72 @@ function App() {
     setPoints((currentPoints) => currentPoints + event.points);
     setTotalShares((currentShares) => currentShares + 1);
     alert(`Shared "${event.title}" and earned ${event.points} points!`);
+  }
+
+  async function handleAuthSubmit(event) {
+    event.preventDefault();
+
+    const email = authEmail.trim();
+
+    if (!email || !authPassword) {
+      setAuthMessage("Enter your email and password.");
+      return;
+    }
+
+    if (authPassword.length < 6) {
+      setAuthMessage("Password must be at least 6 characters.");
+      return;
+    }
+
+    setIsAuthLoading(true);
+    setAuthMessage("");
+
+    if (authMode === "signup") {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password: authPassword,
+      });
+
+      setIsAuthLoading(false);
+
+      if (error) {
+        setAuthMessage(error.message);
+        return;
+      }
+
+      if (data.session) {
+        setAuthMessage("Account created. You are logged in.");
+        setActiveTab("producer");
+      } else {
+        setAuthMessage("Account created. Check your email if confirmation is required.");
+      }
+
+      return;
+    }
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password: authPassword,
+    });
+
+    setIsAuthLoading(false);
+
+    if (error) {
+      setAuthMessage(error.message);
+      return;
+    }
+
+    setAuthMessage("Logged in.");
+    setActiveTab("producer");
+  }
+
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    setUser(null);
+    setAuthPassword("");
+    setAuthMessage("Logged out.");
+    setEditingEventId(null);
+    setActiveTab("fan");
   }
 
   function updateForm(field, value) {
@@ -275,6 +370,12 @@ function App() {
   async function createEvent(event) {
     event.preventDefault();
 
+    if (!user) {
+      alert("Log in as a producer before creating events.");
+      setActiveTab("account");
+      return;
+    }
+
     if (!form.title || !form.venue || !form.city || !form.date || !form.time) {
       alert("Fill out the event name, venue, city, date, and time first.");
       return;
@@ -310,6 +411,7 @@ function App() {
       flyer_image: uploadedFlyer.publicUrl,
       flyer_name: uploadedFlyer.fileName,
       flyer_path: uploadedFlyer.filePath,
+      owner_id: user.id,
     };
 
     const { data, error } = await supabase
@@ -329,10 +431,16 @@ function App() {
     setForm(emptyForm);
     setSelectedEvent(null);
     setActiveTab("fan");
-    alert("Event created with Supabase Storage flier.");
+    alert("Event created.");
   }
 
   function startEdit(event) {
+    if (!user) {
+      alert("Log in before editing events.");
+      setActiveTab("account");
+      return;
+    }
+
     setEditingEventId(event.id);
     setEditForm({
       title: event.title || "",
@@ -356,6 +464,12 @@ function App() {
 
   async function saveEventChanges(event) {
     event.preventDefault();
+
+    if (!user) {
+      alert("Log in before saving changes.");
+      setActiveTab("account");
+      return;
+    }
 
     if (
       !editForm.title ||
@@ -447,6 +561,12 @@ function App() {
   }
 
   async function deleteEvent(eventId) {
+    if (!user) {
+      alert("Log in before deleting events.");
+      setActiveTab("account");
+      return;
+    }
+
     const eventToDelete = events.find((event) => event.id === eventId);
     const confirmed = window.confirm(
       `Delete "${eventToDelete?.title || "this event"}"?`
@@ -492,6 +612,64 @@ function App() {
     );
   }
 
+  function renderAuthPanel(compact = false) {
+    return (
+      <section className={compact ? "authPanel compactAuth" : "authPanel"}>
+        <p className="eyebrow">Producer Login</p>
+        <h1>{authMode === "login" ? "Log in." : "Create account."}</h1>
+        <p>
+          Producers need an account before creating or managing events. Fans can
+          still browse events without logging in.
+        </p>
+
+        <form className="authForm" onSubmit={handleAuthSubmit}>
+          <label className="formField">
+            Email
+            <input
+              type="email"
+              value={authEmail}
+              onChange={(e) => setAuthEmail(e.target.value)}
+              placeholder="you@example.com"
+            />
+          </label>
+
+          <label className="formField">
+            Password
+            <input
+              type="password"
+              value={authPassword}
+              onChange={(e) => setAuthPassword(e.target.value)}
+              placeholder="At least 6 characters"
+            />
+          </label>
+
+          <button className="primaryBtn wide" type="submit" disabled={isAuthLoading}>
+            {isAuthLoading
+              ? "Working..."
+              : authMode === "login"
+              ? "Log In"
+              : "Create Account"}
+          </button>
+        </form>
+
+        {authMessage && <p className="authMessage">{authMessage}</p>}
+
+        <button
+          className="secondaryBtn wide authSwitch"
+          type="button"
+          onClick={() => {
+            setAuthMode(authMode === "login" ? "signup" : "login");
+            setAuthMessage("");
+          }}
+        >
+          {authMode === "login"
+            ? "Need an account? Sign up"
+            : "Already have an account? Log in"}
+        </button>
+      </section>
+    );
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -527,6 +705,12 @@ function App() {
           >
             Rewards
           </button>
+          <button
+            className={activeTab === "account" ? "tab active" : "tab"}
+            onClick={() => goToTab("account")}
+          >
+            Account
+          </button>
         </nav>
       </header>
 
@@ -559,7 +743,7 @@ function App() {
             {!isLoadingEvents && !eventError && events.length === 0 && (
               <section className="emptyState">
                 <h3>No events yet.</h3>
-                <p>Go to Producer and create the first live Supabase event.</p>
+                <p>Log in as a producer and create the first event.</p>
               </section>
             )}
 
@@ -654,13 +838,19 @@ function App() {
           </section>
         )}
 
-        {activeTab === "producer" && (
+       {activeTab === "producer" && !user && (
+  <section className="panel">
+    {renderAuthPanel(true)}
+  </section>
+)}
+
+        {activeTab === "producer" && user && (
           <section className="panel">
             <p className="eyebrow">Producer Dashboard</p>
             <h1>Manage your events.</h1>
             <p>
-              Create, edit, delete, and update fliers. Events now come from
-              Supabase, and fliers are stored in Supabase Storage.
+              Logged in as <strong>{user.email}</strong>. Create, edit, delete,
+              and update fliers.
             </p>
 
             <div className="producerGrid">
@@ -969,11 +1159,6 @@ function App() {
               <button className="primaryBtn wide" type="submit">
                 Publish Event
               </button>
-
-              <p className="helperText">
-                This version saves event records to Supabase and stores fliers in
-                Supabase Storage.
-              </p>
             </form>
           </section>
         )}
@@ -1003,6 +1188,25 @@ function App() {
               <button className="secondaryBtn">Coming Soon</button>
             </div>
           </section>
+        )}
+
+        {activeTab === "account" && (
+          <>
+            {user ? (
+              <section className="panel">
+                <p className="eyebrow">Account</p>
+                <h1>You are logged in.</h1>
+                <p>
+                  Producer account: <strong>{user.email}</strong>
+                </p>
+                <button className="dangerBtn" type="button" onClick={handleLogout}>
+                  Log Out
+                </button>
+              </section>
+            ) : (
+              renderAuthPanel(false)
+            )}
+          </>
         )}
       </main>
     </div>

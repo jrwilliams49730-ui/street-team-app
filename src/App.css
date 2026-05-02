@@ -696,3 +696,47 @@ body {
   color: #ff6b6b;
   font-weight: 900;
 }
+.authPanel {
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 18px;
+}
+
+.compactAuth {
+  margin-top: 10px;
+}
+
+.authForm {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.authMessage {
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 12px;
+  font-weight: 800;
+}
+
+.authSwitch {
+  margin-top: 12px;
+}
+
+.tabs {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  max-width: 720px;
+}
+
+@media (max-width: 560px) {
+  .tabs {
+    gap: 6px;
+  }
+
+  .tab {
+    padding: 10px 6px;
+    font-size: 13px;
+  }
+}
