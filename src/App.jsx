@@ -72,7 +72,7 @@ function makeSafeFileName(fileName) {
     .replace(/-+/g, "-");
 }
 
-async function uploadFlyerToStorage(file) {
+async function uploadFlyerToStorage(file, ownerId) {
   if (!file) {
     return {
       publicUrl: "",
@@ -82,7 +82,7 @@ async function uploadFlyerToStorage(file) {
   }
 
   const safeName = makeSafeFileName(file.name);
-  const filePath = `fliers/${Date.now()}-${safeName}`;
+  const filePath = `${ownerId}/${Date.now()}-${safeName}`;
 
   const { error: uploadError } = await supabase.storage
     .from("event-fliers")
@@ -391,7 +391,7 @@ function App() {
 
     try {
       if (form.flyerFile) {
-        uploadedFlyer = await uploadFlyerToStorage(form.flyerFile);
+        uploadedFlyer = await uploadFlyerToStorage(form.flyerFile, user.id)
       }
     } catch (error) {
       console.error(error);
@@ -493,7 +493,7 @@ function App() {
 
     try {
       if (editForm.flyerFile) {
-        const uploadedFlyer = await uploadFlyerToStorage(editForm.flyerFile);
+        const uploadedFlyer = await uploadFlyerToStorage(editForm.flyerFile, user.id)
 
         finalFlyerImage = uploadedFlyer.publicUrl;
         finalFlyerName = uploadedFlyer.fileName;
