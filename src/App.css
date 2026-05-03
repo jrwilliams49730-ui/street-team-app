@@ -740,3 +740,24 @@ body {
     font-size: 13px;
   }
 }
+
+.shareStats {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.shareStats span {
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.shareStats strong {
+  color: var(--red);
+}

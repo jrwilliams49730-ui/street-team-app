@@ -65,6 +65,32 @@ function cleanPriceForEdit(price) {
   return String(price).replace("$", "");
 }
 
+function getSharerKey() {
+  let sharerKey = localStorage.getItem("streetTeamSharerKey");
+
+  if (!sharerKey) {
+    sharerKey =
+      crypto.randomUUID?.() ||
+      `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    localStorage.setItem("streetTeamSharerKey", sharerKey);
+  }
+
+  return sharerKey;
+}
+
+function makeShareCode(eventId) {
+  return `${eventId}-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+}
+
+function buildShareLink(eventId, shareCode) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("event", String(eventId));
+  url.searchParams.set("share", shareCode);
+  return url.toString();
+}
 function makeSafeFileName(fileName) {
   return fileName
     .toLowerCase()
@@ -151,6 +177,8 @@ function App() {
     loadSavedValue("streetTeamPoints", 120)
   );
   const [events, setEvents] = useState([]);
+  const [shareStats, setShareStats] = useState({});
+const [isLoadingShareStats, setIsLoadingShareStats] = useState(false);
   const [totalShares, setTotalShares] = useState(() =>
     loadSavedValue("streetTeamShares", 0)
   );
@@ -195,6 +223,19 @@ function App() {
     loadEventsFromSupabase();
   }, []);
 
+  useEffect(() => {
+  if (user) {
+    loadShareStatsFromSupabase();
+  } else {
+    setShareStats({});
+  }
+}, [user, events.length]);
+
+useEffect(() => {
+  if (!isLoadingEvents && events.length > 0) {
+    logVisitFromShareLink();
+  }
+}, [isLoadingEvents, events.length]);
   async function loadEventsFromSupabase() {
     setIsLoadingEvents(true);
     setEventError("");
@@ -215,6 +256,76 @@ function App() {
     setIsLoadingEvents(false);
   }
 
+  async function loadShareStatsFromSupabase() {
+  if (!user) return;
+
+  setIsLoadingShareStats(true);
+
+  const { data, error } = await supabase
+    .from("event_share_actions")
+    .select("event_id, action");
+
+  if (error) {
+    console.error(error);
+    setIsLoadingShareStats(false);
+    return;
+  }
+
+  const nextStats = {};
+
+  data.forEach((row) => {
+    if (!nextStats[row.event_id]) {
+      nextStats[row.event_id] = {
+        shares: 0,
+        visits: 0,
+      };
+    }
+
+    if (row.action === "share") {
+      nextStats[row.event_id].shares += 1;
+    }
+
+    if (row.action === "visit") {
+      nextStats[row.event_id].visits += 1;
+    }
+  });
+
+  setShareStats(nextStats);
+  setIsLoadingShareStats(false);
+}
+
+async function logVisitFromShareLink() {
+  const params = new URLSearchParams(window.location.search);
+  const shareCode = params.get("share");
+  const eventId = Number(params.get("event"));
+
+  if (!shareCode || !eventId) return;
+
+  const eventFromLink = events.find((event) => event.id === eventId);
+
+  if (eventFromLink) {
+    setSelectedEvent(eventFromLink);
+    setActiveTab("event");
+  }
+
+  const visitKey = `streetTeamVisited-${shareCode}`;
+
+  if (sessionStorage.getItem(visitKey)) return;
+
+  sessionStorage.setItem(visitKey, "true");
+
+  const { error } = await supabase.from("event_share_actions").insert({
+    event_id: eventId,
+    share_code: shareCode,
+    sharer_key: getSharerKey(),
+    action: "visit",
+  });
+
+  if (error) {
+    console.error(error);
+  }
+}
+
   function goToTab(tabName) {
     setSelectedEvent(null);
     setActiveTab(tabName);
@@ -225,11 +336,39 @@ function App() {
     setActiveTab("event");
   }
 
-  function shareEvent(event) {
-    setPoints((currentPoints) => currentPoints + event.points);
-    setTotalShares((currentShares) => currentShares + 1);
-    alert(`Shared "${event.title}" and earned ${event.points} points!`);
+   async function shareEvent(event) {
+  const shareCode = makeShareCode(event.id);
+  const shareLink = buildShareLink(event.id, shareCode);
+
+  const { error } = await supabase.from("event_share_actions").insert({
+    event_id: event.id,
+    share_code: shareCode,
+    sharer_key: getSharerKey(),
+    action: "share",
+  });
+
+  if (error) {
+    console.error(error);
+    alert("Could not create share link.");
+    return;
   }
+
+  setPoints((currentPoints) => currentPoints + event.points);
+  setTotalShares((currentShares) => currentShares + 1);
+
+  try {
+    await navigator.clipboard.writeText(shareLink);
+    alert(
+      `Share link copied. You earned ${event.points} points for sharing "${event.title}".`
+    );
+  } catch {
+    prompt("Copy your Street Team share link:", shareLink);
+  }
+
+  if (user) {
+    loadShareStatsFromSupabase();
+  }
+}
 
   async function handleAuthSubmit(event) {
     event.preventDefault();
@@ -597,6 +736,19 @@ function App() {
       cancelEdit();
     }
   }
+const producerEvents = user
+  ? events.filter((event) => event.ownerId === user.id)
+  : [];
+
+const producerShareCount = producerEvents.reduce(
+  (total, event) => total + (shareStats[event.id]?.shares || 0),
+  0
+);
+
+const producerVisitCount = producerEvents.reduce(
+  (total, event) => total + (shareStats[event.id]?.visits || 0),
+  0
+);
 
   function EventFlyer({ event, detail = false }) {
     const className = detail ? "detailFlyer" : "flyerMock";
@@ -855,16 +1007,17 @@ function App() {
 
             <div className="producerGrid">
               <div className="miniCard">
-                <strong>{events.length}</strong>
+                <strong>{producerEvents.length}</strong>
                 <span>Active Events</span>
               </div>
               <div className="miniCard">
-                <strong>{totalShares}</strong>
-                <span>Total Shares</span>
+                <strong>{producerShareCount}</strong>
+                <span>Tracked Shares</span>
+        
               </div>
               <div className="miniCard">
-                <strong>{totalShares * 25}</strong>
-                <span>Estimated Reach</span>
+                <strong>{producerVisitCount}</strong>
+                <span>Link Visits</span>
               </div>
             </div>
 
@@ -877,7 +1030,7 @@ function App() {
               {isLoadingEvents && <p>Loading events...</p>}
 
               <div className="manageList">
-                {events.map((event) => (
+                {producerEvents.map((event) => (
                   <article className="manageCard" key={event.id}>
                     <EventFlyer event={event} />
 
@@ -892,6 +1045,14 @@ function App() {
                       <p className="details">
                         {event.city} · {event.date} · {event.time}
                       </p>
+                      <div className="shareStats">
+  <span>
+    Shares: <strong>{shareStats[event.id]?.shares || 0}</strong>
+  </span>
+  <span>
+    Visits: <strong>{shareStats[event.id]?.visits || 0}</strong>
+  </span>
+</div>
 
                       <div className="eventActions">
                         <button
@@ -1212,5 +1373,4 @@ function App() {
     </div>
   );
 }
-
 export default App;
