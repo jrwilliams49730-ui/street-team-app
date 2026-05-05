@@ -49,6 +49,21 @@ const fanEventTypeOptions = [
   "Nightlife",
 ];
 
+const rewardTiers = [
+  {
+    label: "$5 Digital Gift Card",
+    points: 500,
+  },
+  {
+    label: "$10 Digital Gift Card",
+    points: 1000,
+  },
+  {
+    label: "$25 Digital Gift Card",
+    points: 2500,
+  },
+];
+
 function loadSavedValue(key, fallbackValue) {
   try {
     const savedValue = localStorage.getItem(key);
@@ -192,7 +207,7 @@ function App() {
   const [authMessage, setAuthMessage] = useState("");
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [selectedAccountType, setSelectedAccountType] = useState("fan");
-
+  const [userRoles, setUserRoles] = useState([]);
   const [fanProfileForm, setFanProfileForm] = useState(() =>
     loadSavedValue("streetTeamFanProfile", emptyFanProfileForm)
   );
@@ -204,6 +219,35 @@ function App() {
   const [points, setPoints] = useState(() =>
     loadSavedValue("streetTeamPoints", 120)
   );
+
+  const hasFanProfile = Boolean(
+    fanProfile?.display_name || fanProfileForm.displayName?.trim()
+  );
+
+  const hasFanRole = userRoles.includes("fan");
+const hasProducerRole = userRoles.includes("producer");
+
+  const [fanStats, setFanStats] = useState({
+    points: 0,
+    shares: 0,
+    visits: 0,
+    eventsShared: 0,
+  });
+
+  const [isRedeemingReward, setIsRedeemingReward] = useState(false);
+  const [redemptionMessage, setRedemptionMessage] = useState("");
+
+  const nextReward =
+    rewardTiers.find((reward) => fanStats.points < reward.points) ||
+    rewardTiers[rewardTiers.length - 1];
+
+  const pointsToNextReward = Math.max(0, nextReward.points - fanStats.points);
+
+  const rewardProgressPercent =
+    nextReward.points > 0
+      ? Math.min(100, Math.round((fanStats.points / nextReward.points) * 100))
+      : 0;
+
   const [events, setEvents] = useState([]);
   const [shareStats, setShareStats] = useState({});
 const [isLoadingShareStats, setIsLoadingShareStats] = useState(false);
@@ -260,24 +304,16 @@ const [isLoadingShareStats, setIsLoadingShareStats] = useState(false);
 }, [user, events.length]);
 
   useEffect(() => {
-    if (!user) {
-      setFanProfile(null);
-      setFanProfileForm(emptyFanProfileForm);
-      return;
-    }
+  if (!user) {
+    setFanProfile(null);
+    setUserRoles([]);
+    return;
+  }
 
-    async function loadUserRoleAndProfile() {
-      const role = (await getUserRole(user.id)) || selectedAccountType;
-      setSelectedAccountType(role);
-      setActiveTab(role === "fan" ? "streetteam" : "producer");
-
-      if (role === "fan") {
-        await loadFanProfile(user);
-      }
-    }
-
-    loadUserRoleAndProfile();
-  }, [user]);
+  loadUserRoles(user);
+  loadFanProfile(user);
+  loadFanStatsFromSupabase();
+}, [user]);
 
 useEffect(() => {
   if (!isLoadingEvents && events.length > 0) {
@@ -380,6 +416,91 @@ useEffect(() => {
     setIsLoadingShareStats(false);
 }
 
+async function loadFanStatsFromSupabase() {
+  if (!user) return;
+
+  try {
+    const { data, error } = await supabase
+      .from("fan_profiles")
+      .select("*")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (error) {
+      console.error("Error loading fan stats:", error);
+      return;
+    }
+
+    if (data) {
+      setFanStats({
+        points: data.points || 0,
+        shares: data.shares || 0,
+        visits: data.visits || 0,
+        eventsShared: data.events_shared || 0,
+      });
+    }
+  } catch (err) {
+    console.error("Unexpected error loading fan stats:", err);
+  }
+}
+
+async function requestRewardRedemption(reward) {
+  if (!user) {
+    setSelectedAccountType("fan");
+    setAuthMode("signup");
+    setActiveTab("account");
+    return;
+  }
+
+  if (!hasFanProfile) {
+    setRedemptionMessage("Save your fan profile before redeeming rewards.");
+    setActiveTab("streetteam");
+    return;
+  }
+
+  if (fanStats.points < reward.points) {
+    setRedemptionMessage(
+      `You need ${reward.points - fanStats.points} more points for ${reward.label}.`
+    );
+    return;
+  }
+
+  const fanDisplayName =
+    fanProfile?.display_name || fanProfileForm.displayName?.trim();
+
+  const fanEmail = user.email || fanProfile?.email || fanProfileForm.email;
+
+  if (!fanDisplayName || !fanEmail) {
+    setRedemptionMessage("Your fan profile needs a name and account email.");
+    setActiveTab("streetteam");
+    return;
+  }
+
+  setIsRedeemingReward(true);
+  setRedemptionMessage("");
+
+  const { error } = await supabase.from("reward_redemptions").insert({
+    user_id: user.id,
+    fan_display_name: fanDisplayName,
+    fan_email: fanEmail,
+    reward_label: reward.label,
+    points_cost: reward.points,
+    status: "pending",
+  });
+
+  setIsRedeemingReward(false);
+
+  if (error) {
+    console.error(error);
+    setRedemptionMessage("Could not submit reward request.");
+    return;
+  }
+
+  setRedemptionMessage(
+    `${reward.label} request submitted. Street Team will review and fulfill it.`
+  );
+}
+
 async function logVisitFromShareLink() {
   const params = new URLSearchParams(window.location.search);
   const shareCode = params.get("share");
@@ -424,10 +545,18 @@ async function logVisitFromShareLink() {
 
   async function shareEvent(event) {
     if (!user) {
-      alert("Create or log into your fan account before sharing for points.");
-      setActiveTab("streetteam");
-      return;
-    }
+  alert("Create or log into your fan account before sharing for points.");
+  setSelectedAccountType("fan");
+  setAuthMode("signup");
+  setActiveTab("account");
+  return;
+}
+
+if (!hasFanRole) {
+  alert("This account is not marked as a fan account. Log in with a fan account to earn points.");
+  setActiveTab("account");
+  return;
+}
 
     const fanDisplayName =
       fanProfile?.display_name || fanProfileForm.displayName?.trim();
@@ -457,7 +586,7 @@ async function logVisitFromShareLink() {
       return;
     }
 
-    setPoints((currentPoints) => currentPoints + event.points);
+    loadFanStatsFromSupabase();
     setTotalShares((currentShares) => currentShares + 1);
 
     try {
@@ -468,6 +597,20 @@ async function logVisitFromShareLink() {
     } catch {
       prompt("Copy your Street Team share link:", shareLink);
     }
+  
+
+    setFanStats((currentStats) => ({
+  points: currentStats.points + event.points,
+  shares: currentStats.shares + 1,
+  visits: currentStats.visits,
+  eventsShared: currentStats.eventsShared,
+}));
+
+loadShareStatsFromSupabase();
+
+setTimeout(() => {
+  loadFanStatsFromSupabase();
+}, 600);
 
     loadShareStatsFromSupabase();
   }
@@ -490,22 +633,47 @@ async function logVisitFromShareLink() {
   }
 
   async function saveUserRoleForUser(userId, role) {
-    if (!userId || !role) return;
+  if (!userId || !role) return;
 
-    const { error } = await supabase.from("user_roles").upsert(
-      {
-        user_id: userId,
-        role,
-      },
-      {
-        onConflict: "user_id,role",
-      }
-    );
-
-    if (error) {
-      console.error("Could not save user role:", error);
+  const { error } = await supabase.from("user_roles").upsert(
+    {
+      user_id: userId,
+      role,
+    },
+    {
+      onConflict: "user_id,role",
     }
+  );
+
+  if (error) {
+    console.error("Could not save user role:", error);
+    return;
   }
+
+  setUserRoles((currentRoles) =>
+    currentRoles.includes(role) ? currentRoles : [...currentRoles, role]
+  );
+}
+
+async function loadUserRoles(currentUser) {
+  if (!currentUser) {
+    setUserRoles([]);
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("user_roles")
+    .select("role")
+    .eq("user_id", currentUser.id);
+
+  if (error) {
+    console.error("Could not load user roles:", error);
+    setUserRoles([]);
+    return;
+  }
+
+  setUserRoles(data.map((row) => row.role));
+}
 
   async function handleAuthSubmit(event) {
     event.preventDefault();
@@ -1199,10 +1367,36 @@ const producerVisitCount = producerEvents.reduce(
                 </p>
               </div>
 
-              <div className="pointsBox">
-                <span>Your Points</span>
-                <strong>{points}</strong>
-              </div>
+              {user && hasFanProfile ? (
+                <div className="pointsBox">
+                  <span>Your Points</span>
+                  <strong>{fanStats.points}</strong>
+                </div>
+              ) : (
+                <div className="pointsBox lockedPoints">
+                  <span>{user ? "Finish Profile" : "Earn Rewards"}</span>
+                  <p>
+                    {user
+                      ? "Save your fan profile to start tracking points."
+                      : "Create a free fan account to earn points for sharing events."}
+                  </p>
+                  <button
+                    className="secondaryBtn"
+                    type="button"
+                    onClick={() => {
+                      if (user) {
+                        goToTab("streetteam");
+                      } else {
+                        setSelectedAccountType("fan");
+                        setAuthMode("signup");
+                        goToTab("account");
+                      }
+                    }}
+                  >
+                    {user ? "Go to My Team" : "Join Free"}
+                  </button>
+                </div>
+              )}
             </section>
 
             <section className="sectionHeader">
@@ -1310,13 +1504,51 @@ const producerVisitCount = producerEvents.reduce(
           </section>
         )}
 
-       {activeTab === "producer" && !user && (
+  {activeTab === "producer" && (!user || !hasProducerRole) && (
   <section className="panel">
-    {renderAuthPanel(true)}
+    <p className="eyebrow">Producer Dashboard</p>
+    <h1>Producer login required.</h1>
+    <p>
+      Log in with a producer account to create events, upload fliers, edit
+      shows, and track who helped promote.
+    </p>
+
+    {user && !hasProducerRole && (
+      <p className="authMessage">
+        You are currently logged in, but this account is not marked as a
+        producer account.
+      </p>
+    )}
+
+    <div className="eventActions">
+      <button
+        className="primaryBtn"
+        type="button"
+        onClick={() => {
+          setSelectedAccountType("producer");
+          setAuthMode("login");
+          goToTab("account");
+        }}
+      >
+        Log In as Producer
+      </button>
+
+      <button
+        className="secondaryBtn"
+        type="button"
+        onClick={() => {
+          setSelectedAccountType("producer");
+          setAuthMode("signup");
+          goToTab("account");
+        }}
+      >
+        Create Producer Account
+      </button>
+    </div>
   </section>
 )}
 
-        {activeTab === "producer" && user && (
+        {activeTab === "producer" && user && hasProducerRole && (
           <section className="panel">
             <p className="eyebrow">Producer Dashboard</p>
             <h1>Manage your events.</h1>
@@ -1669,20 +1901,44 @@ const producerVisitCount = producerEvents.reduce(
               digital gift cards and ticket discounts.
             </p>
 
-            <div className="rewardCard">
-              <div>
-                <h3>$5 Digital Gift Card</h3>
-                <p>Redeem when you reach 500 points.</p>
-              </div>
-              <button className="secondaryBtn">Coming Soon</button>
-            </div>
+            {redemptionMessage && <p className="authMessage">{redemptionMessage}</p>}
 
-            <div className="rewardCard">
-              <div>
-                <h3>$10 Digital Gift Card</h3>
-                <p>Redeem when you reach 1,000 points.</p>
-              </div>
-              <button className="secondaryBtn">Coming Soon</button>
+            <div className="rewardsList">
+              {rewardTiers.map((reward) => {
+                const hasEnoughPoints =
+                  user && hasFanProfile && fanStats.points >= reward.points;
+
+                const pointsLeft = Math.max(0, reward.points - fanStats.points);
+
+                return (
+                  <div className="rewardCard" key={reward.label}>
+                    <div>
+                      <h3>{reward.label}</h3>
+                      <p>Redeem when you reach {reward.points.toLocaleString()} points.</p>
+
+                      {user && hasFanProfile ? (
+                        <p className="rewardStatus">
+                          {hasEnoughPoints
+                            ? "You have enough points for this reward."
+                            : `${pointsLeft.toLocaleString()} points left.`}
+                        </p>
+                      ) : (
+                        <p className="rewardStatus">
+                          Create a fan profile to start earning rewards.
+                        </p>
+                      )}
+                    </div>
+
+                    <button
+                      className={hasEnoughPoints ? "primaryBtn" : "secondaryBtn"}
+                      disabled={!hasEnoughPoints || isRedeemingReward}
+                      onClick={() => requestRewardRedemption(reward)}
+                    >
+                      {hasEnoughPoints ? "Redeem" : "Locked"}
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           </section>
         )}
@@ -1792,6 +2048,32 @@ const producerVisitCount = producerEvents.reduce(
         )}
         <p>
           Marketing updates: <strong>{fanProfile.marketingConsent ? "Yes" : "No"}</strong>
+        </p>
+      </div>
+    )}
+
+    {user && hasFanProfile && (
+      <div className="rewardProgressCard">
+        <div className="rewardProgressTop">
+          <div>
+            <p className="eyebrow">Reward Progress</p>
+            <h3>{nextReward.label}</h3>
+          </div>
+
+          <strong>{rewardProgressPercent}%</strong>
+        </div>
+
+        <div className="progressBar">
+          <div
+            className="progressFill"
+            style={{ width: `${rewardProgressPercent}%` }}
+          />
+        </div>
+
+        <p>
+          {pointsToNextReward === 0
+            ? "You have enough points for this reward."
+            : `${pointsToNextReward} points until your next reward.`}
         </p>
       </div>
     )}

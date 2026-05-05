@@ -972,3 +972,70 @@ body {
   font-size: 13px;
   text-align: right;
 }
+
+.lockedPoints p {
+  margin: 10px 0 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.lockedPoints .secondaryBtn {
+  width: 100%;
+  padding: 10px 12px;
+}
+
+.rewardProgressCard {
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 16px;
+  margin: 18px 0;
+}
+
+.rewardProgressTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+}
+
+.rewardProgressTop h3 {
+  margin: 0;
+}
+
+.rewardProgressTop strong {
+  color: var(--red);
+  font-size: 32px;
+}
+
+.progressBar {
+  height: 14px;
+  background: rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 14px 0 10px;
+  border: 1px solid var(--line);
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--red);
+  border-radius: 999px;
+}
+
+.rewardsList {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.rewardStatus {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
