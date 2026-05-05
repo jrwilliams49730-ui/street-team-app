@@ -761,3 +761,214 @@ body {
 .shareStats strong {
   color: var(--red);
 }
+
+.fanProfileCard {
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 16px;
+  margin: 18px 0;
+}
+
+.fanProfileCard h3 {
+  margin-top: 0;
+}
+
+.consentRow {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 14px;
+  color: var(--muted);
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.consentRow input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+}
+
+.tabs {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  max-width: 840px;
+}
+
+@media (max-width: 640px) {
+  .tabs {
+    gap: 5px;
+  }
+
+  .tab {
+    font-size: 12px;
+    padding: 10px 5px;
+  }
+}
+
+.tabs {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  max-width: 840px;
+}
+
+@media (max-width: 640px) {
+  .tabs {
+    gap: 5px;
+  }
+
+  .tab {
+    font-size: 12px;
+    padding: 10px 5px;
+  }
+}
+
+.fanProfileCard {
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 16px;
+  margin-top: 18px;
+}
+
+.fanProfileCard h3 {
+  margin-top: 0;
+}
+
+.consentRow {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 14px;
+  color: var(--muted);
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.consentRow input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+}
+
+.roleChoiceGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.roleChoice {
+  text-align: left;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text);
+  border-radius: 20px;
+  padding: 16px;
+  cursor: pointer;
+}
+
+.roleChoice strong {
+  display: block;
+  font-size: 18px;
+  margin-bottom: 6px;
+}
+
+.roleChoice span {
+  display: block;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.activeRole {
+  border-color: var(--red);
+  background: rgba(227, 34, 39, 0.16);
+}
+
+@media (max-width: 640px) {
+  .roleChoiceGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.favoriteTypes {
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 14px;
+}
+
+.favoriteTypesLabel {
+  display: block;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 10px;
+}
+
+.favoriteTypeGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.favoriteType {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 9px 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.activeFavoriteType {
+  border-color: var(--red);
+  background: rgba(227, 34, 39, 0.18);
+  color: var(--text);
+}
+
+.promoterList {
+  margin-top: 12px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 12px;
+}
+
+.promoterList > strong {
+  display: block;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.promoterRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding: 8px 0;
+}
+
+.promoterRow:first-of-type {
+  border-top: none;
+}
+
+.promoterRow span {
+  color: var(--text);
+  font-weight: 900;
+}
+
+.promoterRow em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 13px;
+  text-align: right;
+}

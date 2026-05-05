@@ -30,6 +30,25 @@ const emptyEditForm = {
   flyerFile: null,
 };
 
+const emptyFanProfileForm = {
+  displayName: "",
+  email: "",
+  homeCity: "",
+  favoriteEventTypes: [],
+  marketingConsent: false,
+};
+
+const fanEventTypeOptions = [
+  "Comedy",
+  "Live Music",
+  "Bar Games",
+  "Theater",
+  "Festivals",
+  "Sports",
+  "Family Events",
+  "Nightlife",
+];
+
 function loadSavedValue(key, fallbackValue) {
   try {
     const savedValue = localStorage.getItem(key);
@@ -172,7 +191,16 @@ function App() {
   const [authPassword, setAuthPassword] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [isAuthLoading, setIsAuthLoading] = useState(false);
+  const [selectedAccountType, setSelectedAccountType] = useState("fan");
 
+  const [fanProfileForm, setFanProfileForm] = useState(() =>
+    loadSavedValue("streetTeamFanProfile", emptyFanProfileForm)
+  );
+  const [fanProfile, setFanProfile] = useState(() =>
+    loadSavedValue("streetTeamFanProfile", null)
+  );
+  const [fanProfileMessage, setFanProfileMessage] = useState("");
+  const [isFanProfileLoading, setIsFanProfileLoading] = useState(false);
   const [points, setPoints] = useState(() =>
     loadSavedValue("streetTeamPoints", 120)
   );
@@ -231,6 +259,26 @@ const [isLoadingShareStats, setIsLoadingShareStats] = useState(false);
   }
 }, [user, events.length]);
 
+  useEffect(() => {
+    if (!user) {
+      setFanProfile(null);
+      setFanProfileForm(emptyFanProfileForm);
+      return;
+    }
+
+    async function loadUserRoleAndProfile() {
+      const role = (await getUserRole(user.id)) || selectedAccountType;
+      setSelectedAccountType(role);
+      setActiveTab(role === "fan" ? "streetteam" : "producer");
+
+      if (role === "fan") {
+        await loadFanProfile(user);
+      }
+    }
+
+    loadUserRoleAndProfile();
+  }, [user]);
+
 useEffect(() => {
   if (!isLoadingEvents && events.length > 0) {
     logVisitFromShareLink();
@@ -257,41 +305,79 @@ useEffect(() => {
   }
 
   async function loadShareStatsFromSupabase() {
-  if (!user) return;
+    if (!user) return;
 
-  setIsLoadingShareStats(true);
+    setIsLoadingShareStats(true);
 
-  const { data, error } = await supabase
-    .from("event_share_actions")
-    .select("event_id, action");
+    const { data, error } = await supabase
+      .from("event_share_actions")
+      .select(
+        "event_id, share_code, action, fan_user_id, fan_display_name, points_awarded"
+      );
 
-  if (error) {
-    console.error(error);
+    if (error) {
+      console.error(error);
+      setIsLoadingShareStats(false);
+      return;
+    }
+
+    const nextStats = {};
+    const shareOwnersByCode = {};
+
+    data.forEach((row) => {
+      if (!nextStats[row.event_id]) {
+        nextStats[row.event_id] = {
+          shares: 0,
+          visits: 0,
+          promoters: {},
+        };
+      }
+
+      if (row.action === "share") {
+        const promoterKey = row.fan_user_id || row.fan_display_name || "unknown";
+        const promoterName = row.fan_display_name || "Fan";
+
+        nextStats[row.event_id].shares += 1;
+
+        if (!nextStats[row.event_id].promoters[promoterKey]) {
+          nextStats[row.event_id].promoters[promoterKey] = {
+            name: promoterName,
+            shares: 0,
+            visits: 0,
+            points: 0,
+          };
+        }
+
+        nextStats[row.event_id].promoters[promoterKey].shares += 1;
+        nextStats[row.event_id].promoters[promoterKey].points +=
+          row.points_awarded || 0;
+
+        shareOwnersByCode[`${row.event_id}-${row.share_code}`] = promoterKey;
+      }
+    });
+
+    data.forEach((row) => {
+      if (!nextStats[row.event_id]) return;
+
+      if (row.action === "visit") {
+        nextStats[row.event_id].visits += 1;
+
+        const promoterKey = shareOwnersByCode[`${row.event_id}-${row.share_code}`];
+
+        if (promoterKey && nextStats[row.event_id].promoters[promoterKey]) {
+          nextStats[row.event_id].promoters[promoterKey].visits += 1;
+        }
+      }
+    });
+
+    Object.keys(nextStats).forEach((eventId) => {
+      nextStats[eventId].promoters = Object.values(
+        nextStats[eventId].promoters
+      ).sort((a, b) => b.visits - a.visits || b.shares - a.shares);
+    });
+
+    setShareStats(nextStats);
     setIsLoadingShareStats(false);
-    return;
-  }
-
-  const nextStats = {};
-
-  data.forEach((row) => {
-    if (!nextStats[row.event_id]) {
-      nextStats[row.event_id] = {
-        shares: 0,
-        visits: 0,
-      };
-    }
-
-    if (row.action === "share") {
-      nextStats[row.event_id].shares += 1;
-    }
-
-    if (row.action === "visit") {
-      nextStats[row.event_id].visits += 1;
-    }
-  });
-
-  setShareStats(nextStats);
-  setIsLoadingShareStats(false);
 }
 
 async function logVisitFromShareLink() {
@@ -336,39 +422,90 @@ async function logVisitFromShareLink() {
     setActiveTab("event");
   }
 
-   async function shareEvent(event) {
-  const shareCode = makeShareCode(event.id);
-  const shareLink = buildShareLink(event.id, shareCode);
+  async function shareEvent(event) {
+    if (!user) {
+      alert("Create or log into your fan account before sharing for points.");
+      setActiveTab("streetteam");
+      return;
+    }
 
-  const { error } = await supabase.from("event_share_actions").insert({
-    event_id: event.id,
-    share_code: shareCode,
-    sharer_key: getSharerKey(),
-    action: "share",
-  });
+    const fanDisplayName =
+      fanProfile?.display_name || fanProfileForm.displayName?.trim();
 
-  if (error) {
-    console.error(error);
-    alert("Could not create share link.");
-    return;
-  }
+    if (!fanDisplayName) {
+      alert("Save your fan profile before sharing for points.");
+      setActiveTab("streetteam");
+      return;
+    }
 
-  setPoints((currentPoints) => currentPoints + event.points);
-  setTotalShares((currentShares) => currentShares + 1);
+    const shareCode = makeShareCode(event.id);
+    const shareLink = buildShareLink(event.id, shareCode);
 
-  try {
-    await navigator.clipboard.writeText(shareLink);
-    alert(
-      `Share link copied. You earned ${event.points} points for sharing "${event.title}".`
-    );
-  } catch {
-    prompt("Copy your Street Team share link:", shareLink);
-  }
+    const { error } = await supabase.from("event_share_actions").insert({
+      event_id: event.id,
+      share_code: shareCode,
+      sharer_key: getSharerKey(),
+      action: "share",
+      fan_user_id: user.id,
+      fan_display_name: fanDisplayName,
+      points_awarded: event.points,
+    });
 
-  if (user) {
+    if (error) {
+      console.error(error);
+      alert("Could not create share link.");
+      return;
+    }
+
+    setPoints((currentPoints) => currentPoints + event.points);
+    setTotalShares((currentShares) => currentShares + 1);
+
+    try {
+      await navigator.clipboard.writeText(shareLink);
+      alert(
+        `Share link copied. ${fanDisplayName} earned ${event.points} points for sharing "${event.title}".`
+      );
+    } catch {
+      prompt("Copy your Street Team share link:", shareLink);
+    }
+
     loadShareStatsFromSupabase();
   }
-}
+
+  async function getUserRole(userId) {
+    if (!userId) return null;
+
+    const { data, error } = await supabase
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (error) {
+      console.error("Could not fetch user role:", error);
+      return null;
+    }
+
+    return data?.role ?? null;
+  }
+
+  async function saveUserRoleForUser(userId, role) {
+    if (!userId || !role) return;
+
+    const { error } = await supabase.from("user_roles").upsert(
+      {
+        user_id: userId,
+        role,
+      },
+      {
+        onConflict: "user_id,role",
+      }
+    );
+
+    if (error) {
+      console.error("Could not save user role:", error);
+    }
+  }
 
   async function handleAuthSubmit(event) {
     event.preventDefault();
@@ -401,9 +538,22 @@ async function logVisitFromShareLink() {
         return;
       }
 
-      if (data.session) {
-        setAuthMessage("Account created. You are logged in.");
-        setActiveTab("producer");
+      if (data.session?.user) {
+        const createdUser = data.session.user;
+        await saveUserRoleForUser(createdUser.id, selectedAccountType);
+        setUser(createdUser);
+
+        setAuthMessage(
+          selectedAccountType === "fan"
+            ? "Fan account created. You are logged in."
+            : "Producer account created. You are logged in."
+        );
+
+        setActiveTab(selectedAccountType === "fan" ? "streetteam" : "producer");
+
+        if (selectedAccountType === "fan") {
+          await loadFanProfile(createdUser);
+        }
       } else {
         setAuthMessage("Account created. Check your email if confirmation is required.");
       }
@@ -411,7 +561,7 @@ async function logVisitFromShareLink() {
       return;
     }
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password: authPassword,
     });
@@ -423,8 +573,20 @@ async function logVisitFromShareLink() {
       return;
     }
 
+    if (data?.user) {
+      const loggedInUser = data.user;
+      setUser(loggedInUser);
+
+      const role = (await getUserRole(loggedInUser.id)) || selectedAccountType;
+      setSelectedAccountType(role);
+      setActiveTab(role === "fan" ? "streetteam" : "producer");
+
+      if (role === "fan") {
+        await loadFanProfile(loggedInUser);
+      }
+    }
+
     setAuthMessage("Logged in.");
-    setActiveTab("producer");
   }
 
   async function handleLogout() {
@@ -435,6 +597,131 @@ async function logVisitFromShareLink() {
     setEditingEventId(null);
     setActiveTab("fan");
   }
+
+  function updateFanProfileForm(field, value) {
+  setFanProfileForm((currentForm) => ({
+    ...currentForm,
+    [field]: value,
+  }));
+}
+
+function toggleFavoriteEventType(eventType) {
+  setFanProfileForm((currentForm) => {
+    const alreadySelected = currentForm.favoriteEventTypes.includes(eventType);
+
+    return {
+      ...currentForm,
+      favoriteEventTypes: alreadySelected
+        ? currentForm.favoriteEventTypes.filter((type) => type !== eventType)
+        : [...currentForm.favoriteEventTypes, eventType],
+    };
+  });
+}
+
+async function loadFanProfile(currentUser = user) {
+  const profileUser = currentUser || user;
+  if (!profileUser) return;
+
+  setIsFanProfileLoading(true);
+
+  const { data, error } = await supabase
+    .from("fan_profiles")
+    .select("*")
+    .eq("id", profileUser.id)
+    .maybeSingle();
+
+  setIsFanProfileLoading(false);
+
+  if (error) {
+    console.error("Could not load fan profile:", error);
+    return;
+  }
+
+  if (!data) {
+    setFanProfile(null);
+    setFanProfileForm((currentForm) => ({
+      ...emptyFanProfileForm,
+      email: profileUser.email || currentForm.email || "",
+    }));
+    return;
+  }
+
+  const loadedProfile = {
+    displayName: data.display_name || "",
+    email: data.email || profileUser.email || "",
+    homeCity: data.home_city || "",
+    favoriteEventTypes: Array.isArray(data.favorite_event_types)
+      ? data.favorite_event_types
+      : [],
+    marketingConsent: Boolean(data.marketing_consent),
+  };
+
+  setFanProfile(loadedProfile);
+  setFanProfileForm(loadedProfile);
+}
+
+async function saveFanProfileForm(event) {
+  event.preventDefault();
+
+  if (!user) {
+    setFanProfileMessage("Log in or create an account before saving your fan profile.");
+    setActiveTab("account");
+    return;
+  }
+
+  const displayName = fanProfileForm.displayName.trim();
+  const email = fanProfileForm.email.trim();
+
+  if (!displayName || !email) {
+    setFanProfileMessage("Enter your name/nickname and email.");
+    return;
+  }
+
+  setIsFanProfileLoading(true);
+  setFanProfileMessage("");
+
+  const profileToSave = {
+    id: user.id,
+    display_name: displayName,
+    email,
+    home_city: fanProfileForm.homeCity.trim(),
+    favorite_event_types: fanProfileForm.favoriteEventTypes,
+    marketing_consent: fanProfileForm.marketingConsent,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data, error } = await supabase
+    .from("fan_profiles")
+    .upsert(profileToSave, { onConflict: "id" })
+    .select()
+    .single();
+
+  setIsFanProfileLoading(false);
+
+  if (error) {
+    console.error(error);
+    setFanProfileMessage("Could not save fan profile to Supabase.");
+    return;
+  }
+
+  const updatedFanProfileForm = {
+    displayName,
+    email,
+    homeCity: fanProfileForm.homeCity,
+    favoriteEventTypes: fanProfileForm.favoriteEventTypes,
+    marketingConsent: fanProfileForm.marketingConsent,
+  };
+
+  setFanProfile(updatedFanProfileForm);
+
+  localStorage.setItem(
+    "streetTeamFanProfile",
+    JSON.stringify(updatedFanProfileForm)
+  );
+
+  setFanProfileForm(updatedFanProfileForm);
+  setFanProfileMessage("Fan profile saved on this device.");
+}
 
   function updateForm(field, value) {
     setForm((currentForm) => ({
@@ -767,11 +1054,38 @@ const producerVisitCount = producerEvents.reduce(
   function renderAuthPanel(compact = false) {
     return (
       <section className={compact ? "authPanel compactAuth" : "authPanel"}>
-        <p className="eyebrow">Producer Login</p>
+        <p className="eyebrow">Street Team Account</p>
         <h1>{authMode === "login" ? "Log in." : "Create account."}</h1>
+
+        <div className="roleChoiceGrid">
+          <button
+            className={
+              selectedAccountType === "fan" ? "roleChoice activeRole" : "roleChoice"
+            }
+            type="button"
+            onClick={() => setSelectedAccountType("fan")}
+          >
+            <strong>I'm a Fan</strong>
+            <span>Find events, share shows, earn rewards.</span>
+          </button>
+
+          <button
+            className={
+              selectedAccountType === "producer"
+                ? "roleChoice activeRole"
+                : "roleChoice"
+            }
+            type="button"
+            onClick={() => setSelectedAccountType("producer")}
+          >
+            <strong>I'm a Producer</strong>
+            <span>Post events, upload fliers, track promoters.</span>
+          </button>
+        </div>
+
         <p>
-          Producers need an account before creating or managing events. Fans can
-          still browse events without logging in.
+          Choose how you want to use Street Team. Fans earn rewards by sharing.
+          Producers create events and track who helped promote.
         </p>
 
         <form className="authForm" onSubmit={handleAuthSubmit}>
@@ -858,6 +1172,12 @@ const producerVisitCount = producerEvents.reduce(
             Rewards
           </button>
           <button
+            className={activeTab === "streetteam" ? "tab active" : "tab"}
+            onClick={() => goToTab("streetteam")}
+>
+           My Team
+         </button>
+         <button
             className={activeTab === "account" ? "tab active" : "tab"}
             onClick={() => goToTab("account")}
           >
@@ -1046,13 +1366,29 @@ const producerVisitCount = producerEvents.reduce(
                         {event.city} · {event.date} · {event.time}
                       </p>
                       <div className="shareStats">
-  <span>
-    Shares: <strong>{shareStats[event.id]?.shares || 0}</strong>
-  </span>
-  <span>
-    Visits: <strong>{shareStats[event.id]?.visits || 0}</strong>
-  </span>
-</div>
+                        <span>
+                          Shares: <strong>{shareStats[event.id]?.shares || 0}</strong>
+                        </span>
+                        <span>
+                          Visits: <strong>{shareStats[event.id]?.visits || 0}</strong>
+                        </span>
+                      </div>
+
+                      {shareStats[event.id]?.promoters?.length > 0 && (
+                        <div className="promoterList">
+                          <strong>Top Promoters</strong>
+
+                          {shareStats[event.id].promoters.slice(0, 3).map((promoter) => (
+                            <div className="promoterRow" key={promoter.name}>
+                              <span>{promoter.name}</span>
+                              <em>
+                                {promoter.shares} shares · {promoter.visits} visits · {" "}
+                                {promoter.points} pts
+                              </em>
+                            </div>
+                          ))}
+                        </div>
+                      )}
 
                       <div className="eventActions">
                         <button
@@ -1351,6 +1687,116 @@ const producerVisitCount = producerEvents.reduce(
           </section>
         )}
 
+{activeTab === "streetteam" && (
+  <section className="panel">
+    <p className="eyebrow">My Street Team</p>
+    <h1>{fanProfile ? "Your fan profile." : "Create your fan profile."}</h1>
+    <p>
+      This is where fans track points, rewards, shares, visits, and events they
+      helped promote.
+    </p>
+
+    {!fanProfile && (
+      <div className="emptyState">
+        <p>
+          Save a fan profile so your points and shares stay connected to your
+          account.
+        </p>
+      </div>
+    )}
+
+    <form className="createForm" onSubmit={saveFanProfileForm}>
+      <div className="formGrid">
+        <label className="formField">
+          Name / Nickname
+          <input
+            value={fanProfileForm.displayName}
+            onChange={(e) =>
+              updateFanProfileForm("displayName", e.target.value)
+            }
+            placeholder="Example: Amanda"
+          />
+        </label>
+
+        <label className="formField">
+          Email
+          <input
+            type="email"
+            value={fanProfileForm.email}
+            onChange={(e) => updateFanProfileForm("email", e.target.value)}
+            placeholder="you@example.com"
+          />
+        </label>
+
+        <label className="formField">
+          Home City / Market
+          <input
+            value={fanProfileForm.homeCity}
+            onChange={(e) => updateFanProfileForm("homeCity", e.target.value)}
+            placeholder="Example: Myrtle Beach, SC"
+          />
+        </label>
+
+        <div className="favoriteTypes fullSpan">
+          <span className="favoriteTypesLabel">Favorite Event Types</span>
+
+          <div className="favoriteTypeGrid">
+            {fanEventTypeOptions.map((eventType) => (
+              <button
+                key={eventType}
+                type="button"
+                className={
+                  fanProfileForm.favoriteEventTypes.includes(eventType)
+                    ? "favoriteType activeFavoriteType"
+                    : "favoriteType"
+                }
+                onClick={() => toggleFavoriteEventType(eventType)}
+              >
+                {eventType}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <label className="consentRow fullSpan">
+          <input
+            type="checkbox"
+            checked={fanProfileForm.marketingConsent}
+            onChange={(e) =>
+              updateFanProfileForm("marketingConsent", e.target.checked)
+            }
+          />
+          <span>
+            I agree to receive Street Team reward updates, event
+            recommendations, and promotional emails.
+          </span>
+        </label>
+      </div>
+
+      <button className="primaryBtn wide" type="submit">
+  {isFanProfileLoading ? "Saving..." : "Save Fan Profile"}
+</button>
+
+      {fanProfileMessage && <p className="authMessage">{fanProfileMessage}</p>}
+    </form>
+
+    {fanProfile && (
+      <div className="fanProfileCard">
+        <h3>{fanProfile.displayName}</h3>
+        <p>{fanProfile.email}</p>
+        {fanProfile.homeCity && <p>Home city: <strong>{fanProfile.homeCity}</strong></p>}
+        {fanProfile.favoriteEventTypes?.length > 0 && (
+          <p>
+            Favorite types: <strong>{fanProfile.favoriteEventTypes.join(", ")}</strong>
+          </p>
+        )}
+        <p>
+          Marketing updates: <strong>{fanProfile.marketingConsent ? "Yes" : "No"}</strong>
+        </p>
+      </div>
+    )}
+  </section>
+)}
         {activeTab === "account" && (
           <>
             {user ? (
@@ -1373,4 +1819,5 @@ const producerVisitCount = producerEvents.reduce(
     </div>
   );
 }
+
 export default App;
