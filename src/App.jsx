@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import { supabase } from "./supabaseClient";
 
@@ -379,6 +379,28 @@ function getCheckInStatusLabel(reservation) {
   return "Not eligible";
 }
 
+function isTicketQrActive(reservation) {
+  if (reservation.reservation_type === "paid") {
+    return reservation.status === "paid";
+  }
+
+  return reservation.status === "reserved";
+}
+
+function getTicketQrPayload(reservation) {
+  return JSON.stringify({
+    confirmation_code: reservation.confirmation_code || "",
+    reservation_id: reservation.id,
+    event_id: reservation.event_id,
+  });
+}
+
+function getTicketQrImageUrl(reservation) {
+  return `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(
+    getTicketQrPayload(reservation)
+  )}`;
+}
+
 function makeSafeFileName(fileName) {
   return fileName
     .toLowerCase()
@@ -533,6 +555,11 @@ function App() {
   const [attendeeProfiles, setAttendeeProfiles] = useState({});
   const [ticketMessage, setTicketMessage] = useState(getInitialTicketMessage);
   const [attendeeMessage, setAttendeeMessage] = useState("");
+  const [attendeeSearch, setAttendeeSearch] = useState("");
+  const [verifyCode, setVerifyCode] = useState("");
+  const [verifyResult, setVerifyResult] = useState(null);
+  const [isScannerActive, setIsScannerActive] = useState(false);
+  const [scannerMessage, setScannerMessage] = useState("");
   const [isReservingTicket, setIsReservingTicket] = useState(false);
   const [checkoutTicketId, setCheckoutTicketId] = useState(null);
   const [checkingInReservationId, setCheckingInReservationId] = useState(null);
@@ -557,6 +584,9 @@ function App() {
   const [form, setForm] = useState(emptyForm);
   const [editingEventId, setEditingEventId] = useState(null);
   const [editForm, setEditForm] = useState(emptyEditForm);
+  const scannerVideoRef = useRef(null);
+  const scannerTimerRef = useRef(null);
+  const scannerStreamRef = useRef(null);
 
   function resetFanAccountState() {
     setFanProfile(null);
@@ -572,10 +602,26 @@ function App() {
     setTicketReservations([]);
     setProducerTicketReservations([]);
     setAttendeeProfiles({});
+    setAttendeeSearch("");
+    setVerifyCode("");
+    setVerifyResult(null);
+    stopQrScanner();
   }
 
   useEffect(() => {
     rememberReferralShareCode();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (scannerTimerRef.current) {
+        clearInterval(scannerTimerRef.current);
+      }
+
+      if (scannerStreamRef.current) {
+        scannerStreamRef.current.getTracks().forEach((track) => track.stop());
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -1423,8 +1469,208 @@ async function checkInTicketReservation(reservation) {
   }
 
   setAttendeeMessage("Ticket checked in.");
+  setVerifyResult((currentResult) =>
+    currentResult?.reservation?.id === reservation.id
+      ? {
+          ...currentResult,
+          status: "checked_in",
+          message: "Checked in.",
+          reservation: {
+            ...currentResult.reservation,
+            checked_in: true,
+          },
+        }
+      : currentResult
+  );
   await loadProducerTicketReservationsFromSupabase();
   await loadTicketReservationsFromSupabase();
+}
+
+function getVerificationResultForCode(code) {
+  const normalizedCode = String(code || "").trim().toUpperCase();
+  if (!normalizedCode) {
+    return {
+      status: "invalid",
+      message: "Enter a confirmation code.",
+    };
+  }
+
+  const reservation = producerTicketReservationRows.find(
+    (row) => String(row.confirmation_code || "").toUpperCase() === normalizedCode
+  );
+
+  if (!reservation) {
+    return {
+      status: "invalid",
+      message: "No valid ticket found for your events.",
+    };
+  }
+
+  if (reservation.checked_in) {
+    return {
+      status: "checked_in",
+      message: "Already checked in.",
+      reservation,
+    };
+  }
+
+  if (!canCheckInReservation(reservation)) {
+    return {
+      status: "invalid",
+      message: `${formatTicketStatus(reservation.status)} tickets cannot be checked in.`,
+      reservation,
+    };
+  }
+
+  return {
+    status: "valid",
+    message: "Valid ticket. Ready for check-in.",
+    reservation,
+  };
+}
+
+function verifyTicketByCode(event) {
+  event.preventDefault();
+  setVerifyResult(getVerificationResultForCode(verifyCode));
+}
+
+function getTicketScanPayload(rawValue) {
+  try {
+    const payload = JSON.parse(rawValue);
+    return {
+      confirmationCode: payload.confirmation_code || "",
+      reservationId: payload.reservation_id || payload.ticket_order_id || "",
+      eventId: payload.event_id || "",
+    };
+  } catch {
+    const confirmationCode = String(rawValue || "").match(/ST-[A-Z0-9]{6}/i)?.[0] || "";
+    return {
+      confirmationCode,
+      reservationId: "",
+      eventId: "",
+    };
+  }
+}
+
+function verifyScannedTicket(rawValue) {
+  const payload = getTicketScanPayload(rawValue);
+
+  if (
+    payload.eventId &&
+    !producerEvents.some((event) => String(event.id) === String(payload.eventId))
+  ) {
+    setVerifyResult({
+      status: "invalid",
+      message: "Ticket does not belong to your events.",
+    });
+    return;
+  }
+
+  const reservation = producerTicketReservationRows.find(
+    (row) =>
+      (payload.confirmationCode &&
+        String(row.confirmation_code || "").toUpperCase() ===
+          String(payload.confirmationCode).toUpperCase()) ||
+      (payload.reservationId && String(row.id) === String(payload.reservationId))
+  );
+
+  if (reservation?.confirmation_code) {
+    setVerifyCode(reservation.confirmation_code);
+    setVerifyResult(getVerificationResultForCode(reservation.confirmation_code));
+    return;
+  }
+
+  if (payload.confirmationCode) {
+    setVerifyCode(payload.confirmationCode);
+    setVerifyResult(getVerificationResultForCode(payload.confirmationCode));
+    return;
+  }
+
+  setVerifyResult({
+    status: "invalid",
+    message: "Invalid Ticket.",
+  });
+}
+
+function stopQrScanner() {
+  if (scannerTimerRef.current) {
+    clearInterval(scannerTimerRef.current);
+    scannerTimerRef.current = null;
+  }
+
+  if (scannerStreamRef.current) {
+    scannerStreamRef.current.getTracks().forEach((track) => track.stop());
+    scannerStreamRef.current = null;
+  }
+
+  if (scannerVideoRef.current) {
+    scannerVideoRef.current.srcObject = null;
+  }
+
+  setIsScannerActive(false);
+}
+
+async function startQrScanner() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setScannerMessage("Camera access is not available in this browser.");
+    return;
+  }
+
+  if (!("BarcodeDetector" in window)) {
+    setScannerMessage(
+      "This browser does not support camera QR scanning yet. Use manual code lookup."
+    );
+    return;
+  }
+
+  stopQrScanner();
+  setScannerMessage("Requesting camera permission...");
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: "environment",
+      },
+      audio: false,
+    });
+
+    const detector = new window.BarcodeDetector({ formats: ["qr_code"] });
+    scannerStreamRef.current = stream;
+
+    if (scannerVideoRef.current) {
+      scannerVideoRef.current.srcObject = stream;
+      await scannerVideoRef.current.play();
+    }
+
+    setIsScannerActive(true);
+    setScannerMessage("Scanning...");
+
+    let isDetecting = false;
+    scannerTimerRef.current = window.setInterval(async () => {
+      if (isDetecting || !scannerVideoRef.current) return;
+
+      isDetecting = true;
+
+      try {
+        const codes = await detector.detect(scannerVideoRef.current);
+        const rawValue = codes[0]?.rawValue;
+
+        if (rawValue) {
+          verifyScannedTicket(rawValue);
+          setScannerMessage("QR code scanned.");
+          stopQrScanner();
+        }
+      } catch (error) {
+        console.warn("QR scan failed:", error);
+      } finally {
+        isDetecting = false;
+      }
+    }, 500);
+  } catch (error) {
+    console.warn("Camera permission failed:", error);
+    setScannerMessage("Camera permission was blocked or unavailable.");
+    stopQrScanner();
+  }
 }
 
   function goToTab(tabName) {
@@ -2511,6 +2757,25 @@ const attendeeCounts = producerTicketReservationRows.reduce(
   }
 );
 
+const attendeeSearchText = attendeeSearch.trim().toLowerCase();
+
+const visibleProducerTicketReservationRows = attendeeSearchText
+  ? producerTicketReservationRows.filter((reservation) =>
+      [
+        reservation.attendeeName,
+        reservation.attendeeEmail,
+        reservation.fan_email,
+        reservation.confirmation_code,
+        reservation.eventTitle,
+        reservation.ticketTypeName,
+      ]
+        .filter(Boolean)
+        .some((value) =>
+          String(value).toLowerCase().includes(attendeeSearchText)
+        )
+    )
+  : producerTicketReservationRows;
+
   function getTicketTypesForEvent(eventId) {
     return ticketTypes.filter((ticketType) => ticketType.eventId === eventId);
   }
@@ -3519,8 +3784,80 @@ const attendeeCounts = producerTicketReservationRows.reduce(
                     </div>
                   </div>
 
+                  <form className="createForm" onSubmit={verifyTicketByCode}>
+                    <div className="sectionHeader smallHeader">
+                      <h2>Verify Ticket</h2>
+                      <p>Type or paste a confirmation code from a fan ticket.</p>
+                    </div>
+                    <div className="formGrid">
+                      <label className="formField">
+                        Confirmation Code
+                        <input
+                          value={verifyCode}
+                          onChange={(event) => setVerifyCode(event.target.value)}
+                          placeholder="ST-8K4P2Q"
+                        />
+                      </label>
+                      <button className="primaryBtn" type="submit">
+                        Verify
+                      </button>
+                    </div>
+                    <div className="eventActions">
+                      <button
+                        className="secondaryBtn"
+                        type="button"
+                        onClick={isScannerActive ? stopQrScanner : startQrScanner}
+                      >
+                        {isScannerActive ? "Stop Scanner" : "Open QR Scanner"}
+                      </button>
+                    </div>
+                    <video
+                      className={isScannerActive ? "qrScannerVideo active" : "qrScannerVideo"}
+                      ref={scannerVideoRef}
+                      muted
+                      playsInline
+                    />
+                    {scannerMessage && (
+                      <p className="authMessage">{scannerMessage}</p>
+                    )}
+                    {verifyResult && (
+                      <div className="rewardCard">
+                        <div>
+                          <h3>{verifyResult.message}</h3>
+                          {verifyResult.reservation && (
+                            <p>
+                              {verifyResult.reservation.attendeeName} ·{" "}
+                              {verifyResult.reservation.eventTitle} ·{" "}
+                              {verifyResult.reservation.confirmation_code}
+                            </p>
+                          )}
+                        </div>
+                        {verifyResult.status === "valid" && (
+                          <button
+                            className="primaryBtn"
+                            type="button"
+                            onClick={() =>
+                              checkInTicketReservation(verifyResult.reservation)
+                            }
+                          >
+                            Check In
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </form>
+
+                  <label className="formField">
+                    Search Attendees
+                    <input
+                      value={attendeeSearch}
+                      onChange={(event) => setAttendeeSearch(event.target.value)}
+                      placeholder="Name, email, or confirmation code"
+                    />
+                  </label>
+
                   <div className="rewardsList">
-                  {producerTicketReservationRows.map((reservation) => (
+                  {visibleProducerTicketReservationRows.map((reservation) => (
                     <div className="rewardCard" key={reservation.id}>
                       <div>
                         <h3>{reservation.attendeeName}</h3>
@@ -3536,6 +3873,11 @@ const attendeeCounts = producerTicketReservationRows.reduce(
                         <p className="rewardStatus">
                           {getCheckInStatusLabel(reservation)}
                         </p>
+                        {reservation.confirmation_code && (
+                          <p className="rewardStatus">
+                            Code: <strong>{reservation.confirmation_code}</strong>
+                          </p>
+                        )}
                       </div>
                       <button
                         className={
@@ -3945,6 +4287,11 @@ const attendeeCounts = producerTicketReservationRows.reduce(
               <div className="rewardCard" key={reservation.id}>
                 <div>
                   <h3>{reservation.eventTitle}</h3>
+                  {reservation.confirmation_code && (
+                    <p className="rewardStatus">
+                      Confirmation: <strong>{reservation.confirmation_code}</strong>
+                    </p>
+                  )}
                   <p>
                     {reservation.ticketTypeName} · Qty {reservation.quantity} ·{" "}
                     {formatTicketStatus(reservation.status)}
@@ -3956,6 +4303,21 @@ const attendeeCounts = producerTicketReservationRows.reduce(
                       : ""}
                   </p>
                 </div>
+                {reservation.confirmation_code && isTicketQrActive(reservation) ? (
+                  <img
+                    className="ticketQr"
+                    src={getTicketQrImageUrl(reservation)}
+                    alt={`QR code for ${reservation.confirmation_code}`}
+                  />
+                ) : (
+                  <div className="ticketQr disabledQr">
+                    <span>
+                      {reservation.status === "pending_payment"
+                        ? "Payment pending"
+                        : "QR unavailable"}
+                    </span>
+                  </div>
+                )}
               </div>
             ))}
           </div>
