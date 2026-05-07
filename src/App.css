@@ -726,8 +726,8 @@ body {
 }
 
 .tabs {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  max-width: 720px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  max-width: 840px;
 }
 
 @media (max-width: 560px) {
@@ -760,6 +760,16 @@ body {
 
 .shareStats strong {
   color: var(--red);
+}
+
+.discoveryControls {
+  display: flex;
+  justify-content: flex-end;
+  margin: -4px 0 16px;
+}
+
+.discoveryControls .formField {
+  width: min(220px, 100%);
 }
 
 .fanProfileCard {
@@ -1027,6 +1037,91 @@ body {
   display: grid;
   gap: 14px;
   margin-top: 18px;
+}
+
+.rewardStatus {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sponsorBanner {
+  background:
+    radial-gradient(circle at top left, rgba(227, 34, 39, 0.18), transparent 34%),
+    rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  padding: 22px;
+  margin: 26px 0;
+}
+
+.sponsorBanner h2 {
+  margin-top: 0;
+}
+
+.myTeamRewards {
+  margin: 22px 0;
+}
+
+.myTeamGrid {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.teamDashboardCard {
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 16px;
+}
+
+.teamDashboardCard h3 {
+  margin-top: 0;
+}
+
+.compactProfileForm {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.teamStatsGrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ticketSetup {
+  display: grid;
+  gap: 14px;
+}
+
+.ticketTypeList {
+  display: grid;
+  gap: 14px;
+}
+
+.ticketTypeEditor,
+.ticketPanel {
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 14px;
+}
+
+.ticketQuantityField {
+  margin-top: 12px;
+  max-width: 160px;
+}
+
+.rewardsList {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
 }
 
 .rewardStatus {
