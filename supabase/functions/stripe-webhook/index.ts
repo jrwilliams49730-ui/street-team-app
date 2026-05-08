@@ -125,6 +125,25 @@ Deno.serve(async (req) => {
       throw new Error(pointsError.message);
     }
 
+    if (session.metadata?.applied_redemption_id) {
+      const { error: discountError } = await supabase.rpc("mark_ticket_discount_used", {
+        p_redemption_id: session.metadata.applied_redemption_id,
+        p_reservation_id: orderId,
+        p_stripe_session_id: session.id,
+      });
+
+      if (discountError) {
+        await supabase
+          .from("stripe_webhook_events")
+          .update({
+            processing_error: discountError.message,
+          })
+          .eq("stripe_event_id", event.id);
+
+        throw new Error(discountError.message);
+      }
+    }
+
     await supabase
       .from("stripe_webhook_events")
       .update({

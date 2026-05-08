@@ -298,6 +298,72 @@ function getPointHistoryLabel(transaction) {
   return transaction.description || "Points";
 }
 
+function getTicketDiscountDollars(redemption) {
+  const match = String(redemption?.reward_label || "").match(
+    /\$(\d+(?:\.\d{1,2})?)\s+off\s+ticket/i
+  );
+
+  return match ? Number(match[1]) : 0;
+}
+
+function dedupeTicketReservations(reservations) {
+  const statusRank = {
+    paid: 4,
+    reserved: 3,
+    pending_payment: 2,
+    cancelled: 1,
+    refunded: 1,
+  };
+
+  return Object.values(
+    (reservations || []).reduce((groupedReservations, reservation) => {
+      const purchaseKey =
+        reservation.stripe_session_id ||
+        reservation.stripe_payment_intent_id ||
+        [
+          reservation.user_id,
+          reservation.event_id,
+          reservation.ticket_type_id,
+          reservation.reservation_type,
+          reservation.quantity,
+        ].join(":");
+      const currentReservation = groupedReservations[purchaseKey];
+      const currentRank = statusRank[currentReservation?.status] || 0;
+      const nextRank = statusRank[reservation.status] || 0;
+
+      if (
+        !currentReservation ||
+        nextRank > currentRank ||
+        (nextRank === currentRank &&
+          new Date(reservation.updated_at || reservation.created_at).getTime() >
+            new Date(
+              currentReservation.updated_at || currentReservation.created_at
+            ).getTime())
+      ) {
+        groupedReservations[purchaseKey] = reservation;
+      }
+
+      return groupedReservations;
+    }, {})
+  ).sort(
+    (first, second) =>
+      new Date(second.created_at).getTime() - new Date(first.created_at).getTime()
+  );
+}
+
+function getEventPriceFromTicketTypes(ticketTypesForEvent = []) {
+  if (!ticketTypesForEvent.length) return "Free";
+
+  const paidPrices = ticketTypesForEvent
+    .map((ticketType) => Number(ticketType.price || 0))
+    .filter((price) => Number.isFinite(price) && price > 0);
+
+  if (paidPrices.length === 0) return "Free";
+
+  const lowestPrice = Math.min(...paidPrices);
+  return `$${lowestPrice.toFixed(2)}`;
+}
+
 function getDistanceMiles(fromLocation, event) {
   const eventLatitude = Number(event.latitude);
   const eventLongitude = Number(event.longitude);
@@ -406,6 +472,7 @@ function isTicketQrActive(reservation) {
 function getTicketQrPayload(reservation) {
   return JSON.stringify({
     confirmation_code: reservation.confirmation_code || "",
+    check_in_token: reservation.check_in_token || "",
     reservation_id: reservation.id,
     event_id: reservation.event_id,
   });
@@ -561,6 +628,15 @@ function App() {
   });
 
   const availableFanPoints = fanStats.points;
+  const approvedTicketDiscountRedemption = redemptions.find(
+    (redemption) =>
+      redemption.status === "approved" &&
+      !redemption.used_at &&
+      getTicketDiscountDollars(redemption) > 0
+  );
+  const approvedTicketDiscountDollars = getTicketDiscountDollars(
+    approvedTicketDiscountRedemption
+  );
 
   const nextReward =
     rewardTiers.find((reward) => availableFanPoints < reward.points) ||
@@ -839,7 +915,7 @@ function App() {
       return;
     }
 
-    setTicketReservations(data || []);
+    setTicketReservations(dedupeTicketReservations(data || []));
   }
 
   async function loadProducerTicketReservationsFromSupabase() {
@@ -1682,6 +1758,7 @@ function getTicketScanPayload(rawValue) {
     const payload = JSON.parse(rawValue);
     return {
       confirmationCode: payload.confirmation_code || "",
+      checkInToken: payload.check_in_token || "",
       reservationId: payload.reservation_id || payload.ticket_order_id || "",
       eventId: payload.event_id || "",
     };
@@ -1689,6 +1766,7 @@ function getTicketScanPayload(rawValue) {
     const confirmationCode = String(rawValue || "").match(/ST-[A-Z0-9]{6}/i)?.[0] || "";
     return {
       confirmationCode,
+      checkInToken: "",
       reservationId: "",
       eventId: "",
     };
@@ -1726,6 +1804,8 @@ function verifyScannedTicket(rawValue) {
       (payload.confirmationCode &&
         String(row.confirmation_code || "").toUpperCase() ===
           String(payload.confirmationCode).toUpperCase()) ||
+      (payload.checkInToken &&
+        String(row.check_in_token || "") === String(payload.checkInToken)) ||
       (payload.reservationId && String(row.id) === String(payload.reservationId))
   );
 
@@ -2551,7 +2631,9 @@ async function saveFanProfileForm(event) {
       return;
     }
 
-    const isFree = !form.price || Number(form.price) === 0;
+    const eventPriceLabel = form.isTicketed
+      ? getEventPriceFromTicketTypes(form.ticketTypes)
+      : "Free";
 
     let uploadedFlyer = {
       publicUrl: "",
@@ -2576,7 +2658,7 @@ async function saveFanProfileForm(event) {
       city: form.city,
       event_date: formatDate(form.date),
       event_time: formatTime(form.time),
-      price: isFree ? "Free" : `$${form.price}`,
+      price: eventPriceLabel,
       points: 10,
       is_ticketed: form.isTicketed,
       flyer_image: uploadedFlyer.publicUrl,
@@ -2675,7 +2757,9 @@ async function saveFanProfileForm(event) {
       return;
     }
 
-    const isFree = !editForm.price || Number(editForm.price) === 0;
+    const eventPriceLabel = editForm.isTicketed
+      ? getEventPriceFromTicketTypes(editForm.ticketTypes)
+      : "Free";
 
     let finalFlyerImage = editForm.flyerImage;
     let finalFlyerName = editForm.flyerName;
@@ -2711,7 +2795,7 @@ async function saveFanProfileForm(event) {
       city: editForm.city,
       event_date: editForm.date,
       event_time: editForm.time,
-      price: isFree ? "Free" : `$${editForm.price}`,
+      price: eventPriceLabel,
       points: 10,
       is_ticketed: editForm.isTicketed,
       flyer_image: finalFlyerImage,
@@ -4040,7 +4124,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
               <section className="ticketPanel">
                   <div className="sectionHeader smallHeader">
                     <h2>Tickets</h2>
-                    <p>Free RSVPs can be reserved now. Paid checkout is coming next.</p>
+                    <p>Reserve free RSVPs or choose paid tickets for Stripe checkout.</p>
                   </div>
 
                   {ticketMessage && <p className="authMessage">{ticketMessage}</p>}
@@ -4073,7 +4157,12 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                                 maxPaidQuantity
                               )
                             : 0;
-                        const paidTotal = Number(ticketType.price || 0) * paidQuantity;
+                        const paidSubtotal = Number(ticketType.price || 0) * paidQuantity;
+                        const paidDiscount = Math.min(
+                          paidSubtotal,
+                          approvedTicketDiscountDollars
+                        );
+                        const paidTotal = Math.max(0, paidSubtotal - paidDiscount);
                         const canCheckoutPaidTicket =
                           !isFree &&
                           !ticketType.isEventPriceFallback &&
@@ -4123,6 +4212,11 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                               )}
                               {!isFree && (!hasKnownInventory || remainingTickets > 0) && (
                                 <p className="rewardStatus">
+                                  Ticket: ${paidSubtotal.toFixed(2)}
+                                  {paidDiscount > 0
+                                    ? ` · Street Team reward: -$${paidDiscount.toFixed(2)}`
+                                    : ""}
+                                  {" · "}
                                   Total: ${paidTotal.toFixed(2)}
                                 </p>
                               )}
@@ -4412,19 +4506,6 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                                 <option>Sports</option>
                                 <option>Other</option>
                               </select>
-                            </label>
-
-                            <label className="formField">
-                              Ticket Price
-                              <input
-                                type="number"
-                                min="0"
-                                value={editForm.price}
-                                onChange={(e) =>
-                                  updateEditForm("price", e.target.value)
-                                }
-                                placeholder="0 for free"
-                              />
                             </label>
 
                             <label className="formField">
@@ -4756,17 +4837,6 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                     <option>Sports</option>
                     <option>Other</option>
                   </select>
-                </label>
-
-                <label className="formField">
-                  Ticket Price
-                  <input
-                    type="number"
-                    min="0"
-                    value={form.price}
-                    onChange={(e) => updateForm("price", e.target.value)}
-                    placeholder="0 for free"
-                  />
                 </label>
 
                 <label className="formField">
