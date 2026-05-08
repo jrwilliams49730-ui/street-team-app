@@ -344,14 +344,30 @@ function getInitialTicketMessage() {
   const checkoutStatus = params.get("ticket_checkout");
 
   if (checkoutStatus === "success") {
-    return "Payment received. Confirming your ticket.";
+    return "Payment successful. Your ticket will appear in My Team / My Tickets after Stripe confirms it.";
   }
 
   if (checkoutStatus === "cancelled") {
-    return "Checkout canceled. Releasing the unpaid ticket hold.";
+    return "Checkout canceled. No payment was taken.";
   }
 
   return "";
+}
+
+function getInitialCheckoutReturn() {
+  if (typeof window === "undefined") {
+    return {
+      status: "",
+      eventId: null,
+    };
+  }
+
+  const params = new URLSearchParams(window.location.search);
+
+  return {
+    status: params.get("ticket_checkout") || "",
+    eventId: Number(params.get("event")) || null,
+  };
 }
 
 function formatTicketStatus(status) {
@@ -501,6 +517,7 @@ function App() {
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [selectedAccountType, setSelectedAccountType] = useState("fan");
   const [userRoles, setUserRoles] = useState([]);
+  const [areUserRolesLoaded, setAreUserRolesLoaded] = useState(false);
   const [fanProfileForm, setFanProfileForm] = useState(() =>
     loadSavedValue("streetTeamFanProfile", emptyFanProfileForm)
   );
@@ -516,6 +533,8 @@ function App() {
 
   const hasFanRole = userRoles.includes("fan");
   const hasProducerRole = userRoles.includes("producer");
+  const hasOwnerAdminRole =
+    userRoles.includes("owner") || userRoles.includes("admin");
 
   const [fanStats, setFanStats] = useState({
     points: 0,
@@ -528,6 +547,16 @@ function App() {
   const [isRedeemingReward, setIsRedeemingReward] = useState(false);
   const [redemptionMessage, setRedemptionMessage] = useState("");
   const [redemptions, setRedemptions] = useState([]);
+  const [ownerDashboard, setOwnerDashboard] = useState(null);
+  const [isOwnerDashboardLoading, setIsOwnerDashboardLoading] = useState(false);
+  const [ownerMessage, setOwnerMessage] = useState("");
+  const [ownerSearch, setOwnerSearch] = useState("");
+  const [ownerPointsSourceFilter, setOwnerPointsSourceFilter] = useState("all");
+  const [adminAdjustmentForm, setAdminAdjustmentForm] = useState({
+    userId: "",
+    points: "",
+    reason: "",
+  });
 
   const availableFanPoints = fanStats.points;
 
@@ -556,8 +585,10 @@ function App() {
   const [ticketMessage, setTicketMessage] = useState(getInitialTicketMessage);
   const [attendeeMessage, setAttendeeMessage] = useState("");
   const [attendeeSearch, setAttendeeSearch] = useState("");
+  const [attendeeFilter, setAttendeeFilter] = useState("all");
   const [verifyCode, setVerifyCode] = useState("");
   const [verifyResult, setVerifyResult] = useState(null);
+  const [checkoutReturn, setCheckoutReturn] = useState(getInitialCheckoutReturn);
   const [isScannerActive, setIsScannerActive] = useState(false);
   const [scannerMessage, setScannerMessage] = useState("");
   const [isReservingTicket, setIsReservingTicket] = useState(false);
@@ -587,10 +618,14 @@ function App() {
   const scannerVideoRef = useRef(null);
   const scannerTimerRef = useRef(null);
   const scannerStreamRef = useRef(null);
+  const isOwnerRoute = window.location.pathname === "/street-team-hq";
+  const isOwnerExperience = isOwnerRoute || (user && hasOwnerAdminRole);
+  const isWaitingForUserRoles = Boolean(user && !areUserRolesLoaded);
 
   function resetFanAccountState() {
     setFanProfile(null);
     setUserRoles([]);
+    setAreUserRolesLoaded(false);
     setFanStats({
       points: 0,
       shares: 0,
@@ -603,6 +638,7 @@ function App() {
     setProducerTicketReservations([]);
     setAttendeeProfiles({});
     setAttendeeSearch("");
+    setAttendeeFilter("all");
     setVerifyCode("");
     setVerifyResult(null);
     stopQrScanner();
@@ -637,6 +673,7 @@ function App() {
       (_event, session) => {
         const nextUser = session?.user ?? null;
         setUser(nextUser);
+        setAreUserRolesLoaded(false);
 
         if (!nextUser) {
           resetFanAccountState();
@@ -706,6 +743,12 @@ function App() {
   awardAccountCreationPoints(user);
   awardReferralSignupPoints(user);
 }, [user]);
+
+  useEffect(() => {
+    if (!isOwnerExperience || !user || !hasOwnerAdminRole) return;
+
+    loadOwnerDashboard();
+  }, [isOwnerExperience, user, hasOwnerAdminRole]);
 
   useEffect(() => {
     if (!isLoadingEvents && events.length > 0) {
@@ -1156,6 +1199,87 @@ async function loadRewardRedemptionsFromSupabase() {
   setRedemptions(data || []);
 }
 
+async function loadOwnerDashboard() {
+  setIsOwnerDashboardLoading(true);
+  setOwnerMessage("");
+
+  const { data, error } = await supabase.rpc("get_owner_dashboard");
+
+  setIsOwnerDashboardLoading(false);
+
+  if (error) {
+    console.error(error);
+    setOwnerMessage("Could not load owner dashboard.");
+    return;
+  }
+
+  setOwnerDashboard(data || {});
+}
+
+async function submitAdminPointAdjustment(event) {
+  event.preventDefault();
+
+  const points = Number(adminAdjustmentForm.points);
+
+  if (!adminAdjustmentForm.userId || !Number.isFinite(points) || points === 0) {
+    setOwnerMessage("Choose a user and enter a non-zero points amount.");
+    return;
+  }
+
+  if (!adminAdjustmentForm.reason.trim()) {
+    setOwnerMessage("Enter a reason for the point adjustment.");
+    return;
+  }
+
+  const { error } = await supabase.rpc("admin_adjust_points", {
+    p_user_id: adminAdjustmentForm.userId,
+    p_points: Math.trunc(points),
+    p_reason: adminAdjustmentForm.reason.trim(),
+  });
+
+  if (error) {
+    console.error(error);
+    setOwnerMessage(`Point adjustment failed. ${error.message}`);
+    return;
+  }
+
+  setOwnerMessage("Point adjustment recorded.");
+  setAdminAdjustmentForm({
+    userId: "",
+    points: "",
+    reason: "",
+  });
+  await loadOwnerDashboard();
+}
+
+async function updateRedemptionStatus(redemptionId, status) {
+  const { error } = await supabase.rpc("admin_update_redemption_status", {
+    p_redemption_id: String(redemptionId),
+    p_status: status,
+  });
+
+  if (error) {
+    console.error(error);
+    setOwnerMessage(`Could not update redemption. ${error.message}`);
+    return;
+  }
+
+  setOwnerDashboard((currentDashboard) =>
+    currentDashboard
+      ? {
+          ...currentDashboard,
+          redemptions: (currentDashboard.redemptions || []).map((redemption) =>
+            String(redemption.id) === String(redemptionId)
+              ? { ...redemption, status }
+              : redemption
+          ),
+        }
+      : currentDashboard
+  );
+  setOwnerMessage(`Reward request marked ${status}.`);
+  await loadOwnerDashboard();
+}
+
 async function requestRewardRedemption(reward) {
   if (!user) {
     setSelectedAccountType("fan");
@@ -1446,6 +1570,10 @@ async function cancelOwnPendingTicketReservation(reservationId) {
   }
 
   setTicketMessage("Checkout canceled. The unpaid ticket hold was released.");
+  setCheckoutReturn({
+    status: "cancelled",
+    eventId: Number(new URLSearchParams(window.location.search).get("event")) || null,
+  });
   await loadTicketTypesFromSupabase(events.map((event) => event.id));
   await loadTicketReservationsFromSupabase();
 }
@@ -1920,6 +2048,15 @@ async function startQrScanner() {
 
     const roles = data.map((row) => row.role);
     setUserRoles(roles);
+    setAreUserRolesLoaded(true);
+
+    if (roles.includes("owner")) {
+      return "owner";
+    }
+
+    if (roles.includes("admin")) {
+      return "admin";
+    }
 
     if (roles.includes(selectedAccountType)) {
       return selectedAccountType;
@@ -1954,6 +2091,7 @@ async function startQrScanner() {
 async function loadUserRoles(currentUser) {
   if (!currentUser) {
     setUserRoles([]);
+    setAreUserRolesLoaded(false);
     return;
   }
 
@@ -1965,10 +2103,12 @@ async function loadUserRoles(currentUser) {
   if (error) {
     console.error("Could not load user roles:", error);
     setUserRoles([]);
+    setAreUserRolesLoaded(true);
     return;
   }
 
   setUserRoles(data.map((row) => row.role));
+  setAreUserRolesLoaded(true);
 }
 
   async function handleAuthSubmit(event) {
@@ -2043,7 +2183,13 @@ async function loadUserRoles(currentUser) {
 
       const role = (await getUserRole(loggedInUser.id)) || selectedAccountType;
       setSelectedAccountType(role);
-      setActiveTab(role === "fan" ? "streetteam" : "producer");
+      setActiveTab(
+        role === "owner" || role === "admin"
+          ? "owner"
+          : role === "fan"
+          ? "streetteam"
+          : "producer"
+      );
 
       if (role === "fan") {
         await loadFanProfile(loggedInUser);
@@ -2712,6 +2858,8 @@ const fanTicketReservations = ticketReservations.map((reservation) => {
     eventTitle: event?.title || "Event",
     eventDate: event?.date || "",
     eventTime: event?.time || "",
+    eventVenue: event?.venue || "",
+    eventCity: event?.city || "",
   };
 });
 
@@ -2776,8 +2924,95 @@ const visibleProducerTicketReservationRows = attendeeSearchText
     )
   : producerTicketReservationRows;
 
+const filteredProducerTicketReservationRows = visibleProducerTicketReservationRows.filter(
+  (reservation) => {
+    if (attendeeFilter === "checked_in") return Boolean(reservation.checked_in);
+    if (attendeeFilter === "not_checked_in") return !reservation.checked_in;
+    return true;
+  }
+);
+
+const ownerSearchText = ownerSearch.trim().toLowerCase();
+
+const ownerUsers = ownerDashboard?.users || [];
+const ownerProducers = ownerDashboard?.producers || [];
+const ownerEvents = ownerDashboard?.events || [];
+const ownerTickets = ownerDashboard?.tickets || [];
+const ownerRedemptions = ownerDashboard?.redemptions || [];
+const ownerPoints = ownerDashboard?.points || [];
+const ownerSuspicious = ownerDashboard?.suspicious || [];
+
+const matchesOwnerSearch = (values) =>
+  !ownerSearchText ||
+  values
+    .filter(Boolean)
+    .some((value) => String(value).toLowerCase().includes(ownerSearchText));
+
+const visibleOwnerUsers = ownerUsers.filter((item) =>
+  matchesOwnerSearch([
+    item.email,
+    item.profile_email,
+    item.display_name,
+    item.roles?.join(" "),
+  ])
+);
+
+const visibleOwnerEvents = ownerEvents.filter((item) =>
+  matchesOwnerSearch([item.title, item.venue, item.city, item.owner_email])
+);
+
+const visibleOwnerTickets = ownerTickets.filter((item) =>
+  matchesOwnerSearch([
+    item.buyer_email,
+    item.event_title,
+    item.ticket_type,
+    item.confirmation_code,
+    item.status,
+  ])
+);
+
+const visibleOwnerRedemptions = ownerRedemptions.filter((item) =>
+  matchesOwnerSearch([
+    item.user_email,
+    item.fan_email,
+    item.fan_display_name,
+    item.reward_label,
+    item.status,
+  ])
+);
+
+const visibleOwnerPoints = ownerPoints.filter((item) => {
+  const source = item.source || item.transaction_type || "";
+  const matchesSource =
+    ownerPointsSourceFilter === "all" || source === ownerPointsSourceFilter;
+
+  return (
+    matchesSource &&
+    matchesOwnerSearch([
+      item.user_email,
+      item.source,
+      item.transaction_type,
+      item.description,
+      item.reward_label,
+    ])
+  );
+});
+
   function getTicketTypesForEvent(eventId) {
     return ticketTypes.filter((ticketType) => ticketType.eventId === eventId);
+  }
+
+  function openCheckoutReturnEvent() {
+    const eventFromCheckout = events.find(
+      (event) => event.id === checkoutReturn.eventId
+    );
+
+    if (eventFromCheckout) {
+      openEvent(eventFromCheckout);
+      return;
+    }
+
+    setActiveTab("home");
   }
 
   function renderTicketTypeEditor(mode, currentForm) {
@@ -3010,6 +3245,362 @@ const visibleProducerTicketReservationRows = attendeeSearchText
     );
   }
 
+  if (isOwnerExperience || isWaitingForUserRoles) {
+    return (
+      <div className="app">
+        <header className="topbar">
+          <div className="logoWrap">
+            <img
+              className="brandHeaderLogo"
+              src={`${import.meta.env.BASE_URL}assets/header-logo.png`}
+              alt="Street Team"
+            />
+            <div className="tagline">Control Center</div>
+          </div>
+        </header>
+
+        <main className="content">
+          {isWaitingForUserRoles && (
+            <section className="panel">
+              <p className="eyebrow">Loading</p>
+              <h1>Checking access.</h1>
+            </section>
+          )}
+
+          {!user && renderAuthPanel(true)}
+
+          {user && !isWaitingForUserRoles && !hasOwnerAdminRole && (
+            <section className="panel">
+              <p className="eyebrow">Not Found</p>
+              <h1>This page is not available.</h1>
+              <p>Use a different account if you believe you should have access.</p>
+            </section>
+          )}
+
+          {user && !isWaitingForUserRoles && hasOwnerAdminRole && (
+            <section className="panel">
+              <p className="eyebrow">Owner</p>
+              <h1>Street Team HQ</h1>
+              <p>System-wide operations for authorized owner/admin accounts.</p>
+
+              {ownerMessage && <p className="authMessage">{ownerMessage}</p>}
+
+              <div className="eventActions">
+                <button
+                  className="secondaryBtn"
+                  type="button"
+                  onClick={loadOwnerDashboard}
+                  disabled={isOwnerDashboardLoading}
+                >
+                  {isOwnerDashboardLoading ? "Refreshing..." : "Refresh"}
+                </button>
+              </div>
+
+              <label className="formField">
+                Search
+                <input
+                  value={ownerSearch}
+                  onChange={(event) => setOwnerSearch(event.target.value)}
+                  placeholder="Name, email, event, ticket, or code"
+                />
+              </label>
+
+              <div className="producerGrid">
+                <div className="miniCard">
+                  <strong>{ownerUsers.length}</strong>
+                  <span>Users</span>
+                </div>
+                <div className="miniCard">
+                  <strong>{ownerProducers.length}</strong>
+                  <span>Producers</span>
+                </div>
+                <div className="miniCard">
+                  <strong>{ownerEvents.length}</strong>
+                  <span>Events</span>
+                </div>
+                <div className="miniCard">
+                  <strong>{ownerTickets.length}</strong>
+                  <span>Tickets / Orders</span>
+                </div>
+              </div>
+
+              <section className="managerSection">
+                <div className="sectionHeader smallHeader">
+                  <h2>Manual Points Adjustment</h2>
+                  <p>Every adjustment creates a ledger record.</p>
+                </div>
+                <form className="createForm" onSubmit={submitAdminPointAdjustment}>
+                  <div className="formGrid">
+                    <label className="formField">
+                      User
+                      <select
+                        value={adminAdjustmentForm.userId}
+                        onChange={(event) =>
+                          setAdminAdjustmentForm((currentForm) => ({
+                            ...currentForm,
+                            userId: event.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">Choose user</option>
+                        {ownerUsers.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.email || item.profile_email || item.id}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="formField">
+                      Points
+                      <input
+                        type="number"
+                        value={adminAdjustmentForm.points}
+                        onChange={(event) =>
+                          setAdminAdjustmentForm((currentForm) => ({
+                            ...currentForm,
+                            points: event.target.value,
+                          }))
+                        }
+                        placeholder="Example: 25 or -25"
+                      />
+                    </label>
+                    <label className="formField fullSpan">
+                      Reason
+                      <input
+                        value={adminAdjustmentForm.reason}
+                        onChange={(event) =>
+                          setAdminAdjustmentForm((currentForm) => ({
+                            ...currentForm,
+                            reason: event.target.value,
+                          }))
+                        }
+                        placeholder="Required audit reason"
+                      />
+                    </label>
+                  </div>
+                  <button className="primaryBtn" type="submit">
+                    Record Adjustment
+                  </button>
+                </form>
+              </section>
+
+              <section className="managerSection">
+                <div className="sectionHeader smallHeader">
+                  <h2>Users</h2>
+                  <p>Account basics, roles, and point balances.</p>
+                </div>
+                <div className="rewardsList">
+                  {visibleOwnerUsers.slice(0, 50).map((item) => (
+                    <div className="rewardCard" key={item.id}>
+                      <div>
+                        <h3>{item.display_name || item.email || "User"}</h3>
+                        <p>{item.email || item.profile_email || item.id}</p>
+                        <p className="rewardStatus">
+                          {(item.roles || []).join(", ") || "No role"} ·{" "}
+                          {Number(item.points_balance || 0).toLocaleString()} points ·{" "}
+                          {item.created_at
+                            ? new Date(item.created_at).toLocaleDateString()
+                            : "Unknown date"}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="managerSection">
+                <div className="sectionHeader smallHeader">
+                  <h2>Producers</h2>
+                  <p>Producer accounts and event counts.</p>
+                </div>
+                <div className="rewardsList">
+                  {ownerProducers.slice(0, 50).map((item) => (
+                    <div className="rewardCard" key={item.id}>
+                      <div>
+                        <h3>{item.display_name || item.email || "Producer"}</h3>
+                        <p>{item.email || item.id}</p>
+                        <p className="rewardStatus">
+                          {item.event_count || 0} events · Producer approval/suspension
+                          is not in the current schema yet.
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="managerSection">
+                <div className="sectionHeader smallHeader">
+                  <h2>Events</h2>
+                  <p>All events across producers.</p>
+                </div>
+                <div className="rewardsList">
+                  {visibleOwnerEvents.slice(0, 75).map((item) => (
+                    <div className="rewardCard" key={item.id}>
+                      <div>
+                        <h3>{item.title}</h3>
+                        <p>
+                          {item.venue} · {item.city} · {item.event_date} {item.event_time}
+                        </p>
+                        <p className="rewardStatus">
+                          {item.owner_email || item.owner_id} ·{" "}
+                          {item.is_ticketed ? "Ticketed" : "Not ticketed"} · Event
+                          hide/deactivate is not in the current schema yet.
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="managerSection">
+                <div className="sectionHeader smallHeader">
+                  <h2>Tickets / Orders</h2>
+                  <p>Paid orders, free RSVPs, pending, canceled, refunded, and check-ins.</p>
+                </div>
+                <div className="rewardsList">
+                  {visibleOwnerTickets.slice(0, 100).map((item) => (
+                    <div className="rewardCard" key={item.id}>
+                      <div>
+                        <h3>{item.event_title || "Event"}</h3>
+                        <p>
+                          {item.ticket_type || "Ticket"} · Qty {item.quantity} ·{" "}
+                          {formatTicketStatus(item.status)}
+                        </p>
+                        <p className="rewardStatus">
+                          {item.buyer_email || item.user_id} ·{" "}
+                          {item.confirmation_code || "No code"} ·{" "}
+                          {item.checked_in ? "Checked in" : "Not checked in"}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="managerSection">
+                <div className="sectionHeader smallHeader">
+                  <h2>Rewards / Redemptions</h2>
+                  <p>Update request status without changing points again.</p>
+                </div>
+                <div className="rewardsList">
+                  {visibleOwnerRedemptions.slice(0, 100).map((item) => (
+                    <div className="rewardCard" key={item.id}>
+                      <div>
+                        <h3>{item.reward_label}</h3>
+                        <p>
+                          {item.fan_display_name || item.user_email || item.user_id} ·{" "}
+                          {item.points_cost} points · {item.status}
+                        </p>
+                        <p className="rewardStatus">
+                          {item.created_at
+                            ? new Date(item.created_at).toLocaleString()
+                            : "Unknown date"}
+                        </p>
+                      </div>
+                      <select
+                        value={item.status || "pending"}
+                        onChange={(event) =>
+                          updateRedemptionStatus(item.id, event.target.value)
+                        }
+                      >
+                        <option value="pending">pending</option>
+                        <option value="approved">approved</option>
+                        <option value="fulfilled">fulfilled</option>
+                        <option value="rejected">rejected</option>
+                        <option value="failed">failed</option>
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="managerSection">
+                <div className="sectionHeader smallHeader">
+                  <h2>Points History</h2>
+                  <p>Earned and redeemed ledger entries.</p>
+                </div>
+                <label className="formField">
+                  Source
+                  <select
+                    value={ownerPointsSourceFilter}
+                    onChange={(event) =>
+                      setOwnerPointsSourceFilter(event.target.value)
+                    }
+                  >
+                    <option value="all">All sources</option>
+                    <option value="share_reward">share_link</option>
+                    <option value="own_paid_ticket_purchase">ticket_purchase</option>
+                    <option value="referral_signup">referral_signup</option>
+                    <option value="referred_user_ticket_purchase">
+                      referral_ticket_purchase
+                    </option>
+                    <option value="reward_redemption">reward_redemption</option>
+                    <option value="admin_adjustment">admin_adjustment</option>
+                  </select>
+                </label>
+                <div className="rewardsList">
+                  {visibleOwnerPoints.slice(0, 150).map((item) => (
+                    <div className="rewardCard" key={item.id}>
+                      <div>
+                        <h3>
+                          {Number(item.points || 0) > 0 ? "+" : ""}
+                          {Number(item.points || 0).toLocaleString()} points
+                        </h3>
+                        <p>
+                          {item.user_email || item.user_id} ·{" "}
+                          {item.source || item.transaction_type || "points"}
+                        </p>
+                        <p className="rewardStatus">
+                          {item.description || item.reward_label || "Ledger entry"} ·{" "}
+                          {item.created_at
+                            ? new Date(item.created_at).toLocaleString()
+                            : "Unknown date"}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="managerSection">
+                <div className="sectionHeader smallHeader">
+                  <h2>Suspicious Activity</h2>
+                  <p>Simple high-volume point activity signals for now.</p>
+                </div>
+                <div className="rewardsList">
+                  {ownerSuspicious.length === 0 ? (
+                    <div className="rewardCard">
+                      <div>
+                        <h3>No suspicious activity found.</h3>
+                        <p>Blocked share attempts are not currently recorded.</p>
+                      </div>
+                    </div>
+                  ) : (
+                    ownerSuspicious.map((item) => (
+                      <div
+                        className="rewardCard"
+                        key={`${item.activity_type}-${item.user_id}`}
+                      >
+                        <div>
+                          <h3>{item.activity_type}</h3>
+                          <p>{item.email || item.user_id}</p>
+                          <p className="rewardStatus">
+                            {item.transaction_count} transactions · {item.point_total} points
+                          </p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </section>
+            </section>
+          )}
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -3062,7 +3653,27 @@ const visibleProducerTicketReservationRows = attendeeSearchText
 
       <main className="content">
         {ticketMessage && activeTab !== "event" && activeTab !== "streetteam" && (
-          <p className="authMessage">{ticketMessage}</p>
+          <div className="authMessage">
+            <p>{ticketMessage}</p>
+            {checkoutReturn.status === "success" && (
+              <button
+                className="secondaryBtn"
+                type="button"
+                onClick={() => goToTab("streetteam")}
+              >
+                View My Tickets
+              </button>
+            )}
+            {checkoutReturn.status === "cancelled" && (
+              <button
+                className="secondaryBtn"
+                type="button"
+                onClick={openCheckoutReturnEvent}
+              >
+                Return to Event
+              </button>
+            )}
+          </div>
         )}
 
         {activeTab === "home" && (
@@ -3310,6 +3921,11 @@ const visibleProducerTicketReservationRows = attendeeSearchText
                 and earn points toward future rewards.
               </p>
               {shareMessage && <p className="authMessage">{shareMessage}</p>}
+              {checkoutReturn.status === "cancelled" && (
+                <p className="authMessage">
+                  Checkout canceled. You can choose tickets again below.
+                </p>
+              )}
 
               <section className="ticketPanel">
                   <div className="sectionHeader smallHeader">
@@ -3855,9 +4471,20 @@ const visibleProducerTicketReservationRows = attendeeSearchText
                       placeholder="Name, email, or confirmation code"
                     />
                   </label>
+                  <label className="formField">
+                    Filter
+                    <select
+                      value={attendeeFilter}
+                      onChange={(event) => setAttendeeFilter(event.target.value)}
+                    >
+                      <option value="all">All attendees</option>
+                      <option value="checked_in">Checked in</option>
+                      <option value="not_checked_in">Not checked in</option>
+                    </select>
+                  </label>
 
                   <div className="rewardsList">
-                  {visibleProducerTicketReservationRows.map((reservation) => (
+                  {filteredProducerTicketReservationRows.map((reservation) => (
                     <div className="rewardCard" key={reservation.id}>
                       <div>
                         <h3>{reservation.attendeeName}</h3>
@@ -3873,6 +4500,11 @@ const visibleProducerTicketReservationRows = attendeeSearchText
                         <p className="rewardStatus">
                           {getCheckInStatusLabel(reservation)}
                         </p>
+                        {reservation.checked_in_at && (
+                          <p className="rewardStatus">
+                            Checked in {new Date(reservation.checked_in_at).toLocaleString()}
+                          </p>
+                        )}
                         {reservation.confirmation_code && (
                           <p className="rewardStatus">
                             Code: <strong>{reservation.confirmation_code}</strong>
@@ -4111,6 +4743,12 @@ const visibleProducerTicketReservationRows = attendeeSearchText
     <p className="eyebrow">My Team</p>
     <h1>Your street team dashboard.</h1>
     {ticketMessage && <p className="authMessage">{ticketMessage}</p>}
+    {checkoutReturn.status === "success" && (
+      <p className="authMessage">
+        Payment successful. Your paid ticket will show as paid after Stripe confirms
+        through the webhook.
+      </p>
+    )}
 
     <div className="myTeamGrid">
       <section className="teamDashboardCard">
@@ -4301,6 +4939,24 @@ const visibleProducerTicketReservationRows = attendeeSearchText
                     {reservation.confirmation_code
                       ? ` · ${reservation.confirmation_code}`
                       : ""}
+                  </p>
+                  {(reservation.eventVenue || reservation.eventCity) && (
+                    <p className="rewardStatus">
+                      {[reservation.eventVenue, reservation.eventCity]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </p>
+                  )}
+                  <p className="rewardStatus">
+                    {reservation.checked_in
+                      ? `Checked in${
+                          reservation.checked_in_at
+                            ? ` ${new Date(
+                                reservation.checked_in_at
+                              ).toLocaleString()}`
+                            : ""
+                        }`
+                      : "Not checked in"}
                   </p>
                 </div>
                 {reservation.confirmation_code && isTicketQrActive(reservation) ? (
