@@ -3294,6 +3294,13 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                 >
                   {isOwnerDashboardLoading ? "Refreshing..." : "Refresh"}
                 </button>
+                <button
+                  className="secondaryBtn"
+                  type="button"
+                  onClick={handleLogout}
+                >
+                  Sign Out
+                </button>
               </div>
 
               <label className="formField">
