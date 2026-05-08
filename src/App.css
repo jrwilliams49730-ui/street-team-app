@@ -1131,6 +1131,20 @@ button:disabled {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.topbar .tabs,
+.sectionTabs {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  max-width: 720px;
+}
+
+.sectionTabs {
+  margin: 18px 0;
+}
+
+.ticketGroupTitle {
+  margin: 4px 0 0;
+}
+
 .ticketSetup {
   display: grid;
   gap: 14px;

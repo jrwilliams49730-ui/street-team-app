@@ -508,6 +508,8 @@ function EventFlyer({ event, detail = false }) {
 function App() {
   const [activeTab, setActiveTab] = useState("home");
   const [selectedEvent, setSelectedEvent] = useState(null);
+  const [myTeamTab, setMyTeamTab] = useState("overview");
+  const [producerTab, setProducerTab] = useState("dashboard");
 
   const [user, setUser] = useState(null);
   const [authMode, setAuthMode] = useState("login");
@@ -588,6 +590,8 @@ function App() {
   const [attendeeFilter, setAttendeeFilter] = useState("all");
   const [verifyCode, setVerifyCode] = useState("");
   const [verifyResult, setVerifyResult] = useState(null);
+  const [scannerEventId, setScannerEventId] = useState("all");
+  const [visibleTicketQrIds, setVisibleTicketQrIds] = useState({});
   const [checkoutReturn, setCheckoutReturn] = useState(getInitialCheckoutReturn);
   const [isScannerActive, setIsScannerActive] = useState(false);
   const [scannerMessage, setScannerMessage] = useState("");
@@ -1284,7 +1288,7 @@ async function requestRewardRedemption(reward) {
   if (!user) {
     setSelectedAccountType("fan");
     setAuthMode("signup");
-    setActiveTab("account");
+    setActiveTab("streetteam");
     return;
   }
 
@@ -1439,7 +1443,7 @@ async function reserveTicket(ticketType) {
     setTicketMessage("Log in before getting tickets.");
     setSelectedAccountType("fan");
     setAuthMode("login");
-    setActiveTab("account");
+    setActiveTab("streetteam");
     return;
   }
 
@@ -1499,7 +1503,7 @@ async function startPaidTicketCheckout(ticketType) {
     setTicketMessage("Log in before buying tickets.");
     setSelectedAccountType("fan");
     setAuthMode("login");
-    setActiveTab("account");
+    setActiveTab("streetteam");
     return;
   }
 
@@ -1634,6 +1638,17 @@ function getVerificationResultForCode(code) {
     };
   }
 
+  if (
+    scannerEventId !== "all" &&
+    String(reservation.event_id) !== String(scannerEventId)
+  ) {
+    return {
+      status: "invalid",
+      message: "Ticket does not belong to this event.",
+      reservation,
+    };
+  }
+
   if (reservation.checked_in) {
     return {
       status: "checked_in",
@@ -1690,6 +1705,18 @@ function verifyScannedTicket(rawValue) {
     setVerifyResult({
       status: "invalid",
       message: "Ticket does not belong to your events.",
+    });
+    return;
+  }
+
+  if (
+    scannerEventId !== "all" &&
+    payload.eventId &&
+    String(payload.eventId) !== String(scannerEventId)
+  ) {
+    setVerifyResult({
+      status: "invalid",
+      message: "Ticket does not belong to this event.",
     });
     return;
   }
@@ -1801,10 +1828,26 @@ async function startQrScanner() {
   }
 }
 
-  function goToTab(tabName) {
-    setSelectedEvent(null);
-    setActiveTab(tabName);
+function goToTab(tabName) {
+  setSelectedEvent(null);
+
+  if (!user && tabName === "streetteam") {
+    setSelectedAccountType("fan");
   }
+
+  if (!user && tabName === "producer") {
+    setSelectedAccountType("producer");
+  }
+
+  setActiveTab(tabName);
+}
+
+function toggleTicketQr(reservationId) {
+  setVisibleTicketQrIds((currentIds) => ({
+    ...currentIds,
+    [reservationId]: !currentIds[reservationId],
+  }));
+}
 
   function openEvent(event) {
     setSelectedEvent(event);
@@ -1819,7 +1862,7 @@ async function startQrScanner() {
       alert(message);
       setSelectedAccountType("fan");
       setAuthMode("signup");
-      setActiveTab("account");
+      setActiveTab("streetteam");
       return;
     }
 
@@ -1828,7 +1871,7 @@ async function startQrScanner() {
         "This account is not marked as a fan account. Log in with a fan account to earn points.";
       setShareMessage(message);
       alert(message);
-      setActiveTab("account");
+      setActiveTab("streetteam");
       return;
     }
 
@@ -2115,6 +2158,12 @@ async function loadUserRoles(currentUser) {
     event.preventDefault();
 
     const email = authEmail.trim();
+    const accountTypeForSubmit =
+      activeTab === "producer"
+        ? "producer"
+        : activeTab === "streetteam"
+        ? "fan"
+        : selectedAccountType;
 
     if (!email || !authPassword) {
       setAuthMessage("Enter your email and password.");
@@ -2144,18 +2193,18 @@ async function loadUserRoles(currentUser) {
 
       if (data.session?.user) {
         const createdUser = data.session.user;
-        await saveUserRoleForUser(createdUser.id, selectedAccountType);
+        await saveUserRoleForUser(createdUser.id, accountTypeForSubmit);
         setUser(createdUser);
 
         setAuthMessage(
-          selectedAccountType === "fan"
+          accountTypeForSubmit === "fan"
             ? "Fan account created. You are logged in."
             : "Producer account created. You are logged in."
         );
 
-        setActiveTab(selectedAccountType === "fan" ? "streetteam" : "producer");
+        setActiveTab(accountTypeForSubmit === "fan" ? "streetteam" : "producer");
 
-        if (selectedAccountType === "fan") {
+        if (accountTypeForSubmit === "fan") {
           await loadFanProfile(createdUser);
         }
       } else {
@@ -2275,7 +2324,7 @@ async function saveFanProfileForm(event) {
 
   if (!user) {
     setFanProfileMessage("Log in or create an account before saving your fan profile.");
-    setActiveTab("account");
+    setActiveTab("streetteam");
     return;
   }
 
@@ -2482,7 +2531,7 @@ async function saveFanProfileForm(event) {
 
     if (!user || !hasProducerRole) {
       alert("Log in as a producer before creating events.");
-      setActiveTab("account");
+      setActiveTab("producer");
       return;
     }
 
@@ -2569,7 +2618,7 @@ async function saveFanProfileForm(event) {
   function startEdit(event) {
     if (!user || !hasProducerRole || event.ownerId !== user.id) {
       alert("Log in as the event producer before editing events.");
-      setActiveTab("account");
+      setActiveTab("producer");
       return;
     }
 
@@ -2611,7 +2660,7 @@ async function saveFanProfileForm(event) {
 
     if (!user || !hasProducerRole || originalEvent?.ownerId !== user.id) {
       alert("Log in as the event producer before saving changes.");
-      setActiveTab("account");
+      setActiveTab("producer");
       return;
     }
 
@@ -2720,7 +2769,7 @@ async function saveFanProfileForm(event) {
 
     if (!user || !hasProducerRole || eventToDelete?.ownerId !== user.id) {
       alert("Log in as the event producer before deleting events.");
-      setActiveTab("account");
+      setActiveTab("producer");
       return;
     }
 
@@ -2863,6 +2912,43 @@ const fanTicketReservations = ticketReservations.map((reservation) => {
   };
 });
 
+const pointTotals = pointHistory.reduce(
+  (totals, transaction) => {
+    const points = Number(transaction.points || 0);
+    if (points > 0) totals.earned += points;
+    if (points < 0) totals.redeemed += Math.abs(points);
+    return totals;
+  },
+  { earned: 0, redeemed: 0 }
+);
+
+function getEventDateValue(date, time = "") {
+  const parsed = new Date(`${date || ""} ${time || ""}`.trim());
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isPastTicketReservation(reservation) {
+  const eventDate = getEventDateValue(reservation.eventDate, reservation.eventTime);
+  return eventDate ? eventDate < new Date() : false;
+}
+
+function isPastProducerEvent(event) {
+  const eventDate = getEventDateValue(event.date, event.time);
+  return eventDate ? eventDate < new Date() : false;
+}
+
+const upcomingFanTicketReservations = fanTicketReservations.filter(
+  (reservation) => !isPastTicketReservation(reservation)
+);
+
+const pastFanTicketReservations = fanTicketReservations.filter(
+  isPastTicketReservation
+);
+
+const upcomingProducerEvents = producerEvents.filter(
+  (event) => !isPastProducerEvent(event)
+);
+
 const producerTicketReservationRows = producerTicketReservations.map((reservation) => {
     const ticketType = ticketTypes.find(
       (item) => item.id === reservation.ticket_type_id
@@ -2904,6 +2990,19 @@ const attendeeCounts = producerTicketReservationRows.reduce(
     notCheckedIn: 0,
   }
 );
+
+const producerTicketsSold = producerTicketReservationRows
+  .filter((reservation) => ["paid", "reserved"].includes(reservation.status))
+  .reduce((total, reservation) => total + Number(reservation.quantity || 0), 0);
+
+const recentProducerCheckIns = producerTicketReservationRows
+  .filter((reservation) => reservation.checked_in)
+  .sort(
+    (first, second) =>
+      new Date(second.checked_in_at || second.created_at).getTime() -
+      new Date(first.checked_in_at || first.created_at).getTime()
+  )
+  .slice(0, 5);
 
 const attendeeSearchText = attendeeSearch.trim().toLowerCase();
 
@@ -3160,41 +3259,51 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
     );
   }
 
-  function renderAuthPanel(compact = false) {
+  function renderAuthPanel(compact = false, lockedRole = null) {
+    const isLockedToFan = lockedRole === "fan";
+    const isLockedToProducer = lockedRole === "producer";
+
     return (
       <section className={compact ? "authPanel compactAuth" : "authPanel"}>
-        <p className="eyebrow">Street Team Account</p>
+        <p className="eyebrow">
+          {isLockedToProducer ? "Producer Account" : "Street Team Account"}
+        </p>
         <h1>{authMode === "login" ? "Log in." : "Create account."}</h1>
 
-        <div className="roleChoiceGrid">
-          <button
-            className={
-              selectedAccountType === "fan" ? "roleChoice activeRole" : "roleChoice"
-            }
-            type="button"
-            onClick={() => setSelectedAccountType("fan")}
-          >
-            <strong>I'm a Fan</strong>
-            <span>Find events, share shows, earn rewards.</span>
-          </button>
+        {!lockedRole && (
+          <div className="roleChoiceGrid">
+            <button
+              className={
+                selectedAccountType === "fan" ? "roleChoice activeRole" : "roleChoice"
+              }
+              type="button"
+              onClick={() => setSelectedAccountType("fan")}
+            >
+              <strong>I'm a Fan</strong>
+              <span>Find events, share shows, earn rewards.</span>
+            </button>
 
-          <button
-            className={
-              selectedAccountType === "producer"
-                ? "roleChoice activeRole"
-                : "roleChoice"
-            }
-            type="button"
-            onClick={() => setSelectedAccountType("producer")}
-          >
-            <strong>I'm a Producer</strong>
-            <span>Post events, upload fliers, track promoters.</span>
-          </button>
-        </div>
+            <button
+              className={
+                selectedAccountType === "producer"
+                  ? "roleChoice activeRole"
+                  : "roleChoice"
+              }
+              type="button"
+              onClick={() => setSelectedAccountType("producer")}
+            >
+              <strong>I'm a Producer</strong>
+              <span>Post events, upload fliers, track promoters.</span>
+            </button>
+          </div>
+        )}
 
         <p>
-          Choose how you want to use Street Team. Fans earn rewards by sharing.
-          Producers create events and track who helped promote.
+          {isLockedToProducer
+            ? "Log in or create a producer account to create events, upload fliers, and track attendees."
+            : isLockedToFan
+            ? "Log in or create a fan account to track points, rewards, and tickets."
+            : "Choose how you want to use Street Team. Fans earn rewards by sharing. Producers create events and track who helped promote."}
         </p>
 
         <form className="authForm" onSubmit={handleAuthSubmit}>
@@ -3635,25 +3744,19 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
             }
             onClick={() => goToTab("fan")}
           >
-            Discover
+            Shows
+          </button>
+          <button
+            className={activeTab === "streetteam" ? "tab active" : "tab"}
+            onClick={() => goToTab("streetteam")}
+          >
+            My Team
           </button>
           <button
             className={activeTab === "producer" ? "tab active" : "tab"}
             onClick={() => goToTab("producer")}
           >
             Producer
-          </button>
-          <button
-            className={activeTab === "streetteam" ? "tab active" : "tab"}
-            onClick={() => goToTab("streetteam")}
->
-           My Team
-         </button>
-         <button
-            className={activeTab === "account" ? "tab active" : "tab"}
-            onClick={() => goToTab("account")}
-          >
-            Account
           </button>
         </nav>
       </header>
@@ -3792,7 +3895,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                       } else {
                         setSelectedAccountType("fan");
                         setAuthMode("signup");
-                        goToTab("account");
+                        goToTab("streetteam");
                       }
                     }}
                   >
@@ -4097,8 +4200,8 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
       </p>
     )}
 
-    <div className="eventActions">
-      {user && !hasProducerRole ? (
+    {user && !hasProducerRole ? (
+      <div className="eventActions">
         <button
           className="primaryBtn"
           type="button"
@@ -4106,36 +4209,17 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
         >
           Add Producer Access
         </button>
-      ) : (
         <button
-          className="primaryBtn"
+          className="secondaryBtn"
           type="button"
-          onClick={() => {
-            setSelectedAccountType("producer");
-            setAuthMode("login");
-            goToTab("account");
-          }}
+          onClick={handleLogout}
         >
-          Log In as Producer
+          Log Out
         </button>
-      )}
-
-      <button
-        className="secondaryBtn"
-        type="button"
-        onClick={() => {
-          if (user) {
-            handleLogout();
-          } else {
-            setSelectedAccountType("producer");
-            setAuthMode("signup");
-            goToTab("account");
-          }
-        }}
-      >
-        {user ? "Log Out" : "Create Producer Account"}
-      </button>
-    </div>
+      </div>
+    ) : (
+      renderAuthPanel(false, "producer")
+    )}
   </section>
 )}
 
@@ -4147,7 +4231,31 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
               Logged in as <strong>{user.email}</strong>. Create, edit, delete,
               and update fliers.
             </p>
+            <div className="eventActions">
+              <button className="secondaryBtn" type="button" onClick={handleLogout}>
+                Log Out
+              </button>
+            </div>
 
+            <div className="tabs sectionTabs">
+              {[
+                ["dashboard", "Dashboard"],
+                ["events", "Events"],
+                ["tickets", "Tickets"],
+                ["scanner", "Scanner"],
+              ].map(([tabId, label]) => (
+                <button
+                  className={producerTab === tabId ? "tab active" : "tab"}
+                  key={tabId}
+                  type="button"
+                  onClick={() => setProducerTab(tabId)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {producerTab === "dashboard" && (
             <div className="producerGrid">
               <div className="miniCard">
                 <strong>{producerEvents.length}</strong>
@@ -4162,8 +4270,51 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                 <strong>{producerVisitCount}</strong>
                 <span>Link Visits</span>
               </div>
+              <div className="miniCard">
+                <strong>{upcomingProducerEvents.length}</strong>
+                <span>Upcoming Events</span>
+              </div>
+              <div className="miniCard">
+                <strong>{producerTicketsSold}</strong>
+                <span>Tickets Sold</span>
+              </div>
+              <div className="miniCard">
+                <strong>{attendeeCounts.checkedIn}</strong>
+                <span>Recent Check-ins</span>
+              </div>
             </div>
+            )}
 
+            {producerTab === "dashboard" && (
+              <section className="managerSection">
+                <div className="sectionHeader smallHeader">
+                  <h2>Status</h2>
+                  <p>Your event and ticket setup at a glance.</p>
+                </div>
+                <div className="rewardsList">
+                  <div className="rewardCard">
+                    <div>
+                      <h3>{upcomingProducerEvents.length} upcoming event(s)</h3>
+                      <p>Use the Events tab to create or edit shows.</p>
+                    </div>
+                  </div>
+                  <div className="rewardCard">
+                    <div>
+                      <h3>{recentProducerCheckIns.length} latest check-in(s)</h3>
+                      <p>
+                        {recentProducerCheckIns.length
+                          ? recentProducerCheckIns
+                              .map((item) => item.attendeeName)
+                              .join(", ")
+                          : "No check-ins yet."}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {producerTab === "events" && (
             <section className="managerSection">
               <div className="sectionHeader smallHeader">
                 <h2>Your Events</h2>
@@ -4372,11 +4523,17 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                 ))}
               </div>
             </section>
+            )}
 
+            {(producerTab === "tickets" || producerTab === "scanner") && (
             <section className="managerSection">
               <div className="sectionHeader smallHeader">
-                <h2>Attendees</h2>
-                <p>Free RSVPs and paid ticket purchases for your events.</p>
+                <h2>{producerTab === "scanner" ? "Scanner" : "Tickets"}</h2>
+                <p>
+                  {producerTab === "scanner"
+                    ? "Scan or verify confirmation codes for check-in."
+                    : "Free RSVPs and paid ticket purchases for your events."}
+                </p>
               </div>
 
               {attendeeMessage && <p className="authMessage">{attendeeMessage}</p>}
@@ -4407,12 +4564,27 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                     </div>
                   </div>
 
+                  {producerTab === "scanner" && (
                   <form className="createForm" onSubmit={verifyTicketByCode}>
                     <div className="sectionHeader smallHeader">
                       <h2>Verify Ticket</h2>
                       <p>Type or paste a confirmation code from a fan ticket.</p>
                     </div>
                     <div className="formGrid">
+                      <label className="formField">
+                        Event
+                        <select
+                          value={scannerEventId}
+                          onChange={(event) => setScannerEventId(event.target.value)}
+                        >
+                          <option value="all">All producer events</option>
+                          {producerEvents.map((event) => (
+                            <option key={event.id} value={event.id}>
+                              {event.title}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                       <label className="formField">
                         Confirmation Code
                         <input
@@ -4469,7 +4641,10 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                       </div>
                     )}
                   </form>
+                  )}
 
+                  {producerTab === "tickets" && (
+                  <>
                   <label className="formField">
                     Search Attendees
                     <input
@@ -4543,10 +4718,14 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                     </div>
                   ))}
                   </div>
+                  </>
+                  )}
                 </div>
               )}
             </section>
+            )}
 
+            {producerTab === "events" && (
             <form className="createForm" onSubmit={createEvent}>
               <div className="sectionHeader smallHeader">
                 <h2>Create New Event</h2>
@@ -4658,6 +4837,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                 Publish Event
               </button>
             </form>
+            )}
           </section>
         )}
 
@@ -4715,33 +4895,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
 {activeTab === "streetteam" && !user && (
   <section className="panel">
     <p className="eyebrow">My Team</p>
-    <h1>Log in</h1>
-
-    <div className="eventActions">
-      <button
-        className="primaryBtn"
-        type="button"
-        onClick={() => {
-          setSelectedAccountType("fan");
-          setAuthMode("login");
-          goToTab("account");
-        }}
-      >
-        Log In
-      </button>
-
-      <button
-        className="secondaryBtn"
-        type="button"
-        onClick={() => {
-          setSelectedAccountType("fan");
-          setAuthMode("signup");
-          goToTab("account");
-        }}
-      >
-        Create Account
-      </button>
-    </div>
+    {renderAuthPanel(false, "fan")}
   </section>
 )}
 
@@ -4757,7 +4911,26 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
       </p>
     )}
 
+    <div className="tabs sectionTabs">
+      {[
+        ["overview", "Overview"],
+        ["rewards", "Rewards"],
+        ["history", "History"],
+        ["tickets", "Tickets"],
+      ].map(([tabId, label]) => (
+        <button
+          className={myTeamTab === tabId ? "tab active" : "tab"}
+          key={tabId}
+          type="button"
+          onClick={() => setMyTeamTab(tabId)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+
     <div className="myTeamGrid">
+      {myTeamTab === "overview" && (
       <section className="teamDashboardCard">
         <div className="rewardProgressTop">
           <div>
@@ -4768,6 +4941,9 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
         </div>
         <p>{fanProfile?.email || fanProfileForm.email || user.email}</p>
         <p>{availableFanPoints.toLocaleString()} points available</p>
+        <button className="secondaryBtn wide" type="button" onClick={handleLogout}>
+          Log Out
+        </button>
 
         {!hasFanRole && (
           <button
@@ -4808,7 +4984,9 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
 
         {fanProfileMessage && <p className="authMessage">{fanProfileMessage}</p>}
       </section>
+      )}
 
+      {myTeamTab === "rewards" && (
       <section className="teamDashboardCard">
         <p className="eyebrow">Rewards</p>
         <h3>{nextReward.label}</h3>
@@ -4856,7 +5034,9 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
           })}
         </div>
       </section>
+      )}
 
+      {myTeamTab === "overview" && (
       <section className="teamDashboardCard">
         <p className="eyebrow">Share Stats</p>
         <div className="producerGrid teamStatsGrid">
@@ -4873,8 +5053,61 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
             <span>Events Shared</span>
           </div>
         </div>
+        <p className="rewardStatus">
+          Share a show once to earn points. Referral signup and paid ticket points
+          appear here after the matching Supabase records are confirmed.
+        </p>
       </section>
+      )}
 
+      {myTeamTab === "overview" && (
+      <section className="teamDashboardCard">
+        <p className="eyebrow">Points Summary</p>
+        <div className="producerGrid teamStatsGrid">
+          <div className="miniCard">
+            <strong>{availableFanPoints.toLocaleString()}</strong>
+            <span>Available</span>
+          </div>
+          <div className="miniCard">
+            <strong>{pointTotals.earned.toLocaleString()}</strong>
+            <span>Lifetime Earned</span>
+          </div>
+          <div className="miniCard">
+            <strong>{pointTotals.redeemed.toLocaleString()}</strong>
+            <span>Redeemed</span>
+          </div>
+        </div>
+      </section>
+      )}
+
+      {myTeamTab === "overview" && pointHistory.length > 0 && (
+      <section className="teamDashboardCard">
+        <p className="eyebrow">Recent Activity</p>
+        <div className="rewardsList">
+          {pointHistory.slice(0, 3).map((transaction) => {
+            const points = Number(transaction.points || 0);
+
+            return (
+              <div className="rewardCard" key={transaction.id}>
+                <div>
+                  <h3>
+                    {points > 0 ? "+" : ""}
+                    {points.toLocaleString()} {getPointHistoryLabel(transaction)}
+                  </h3>
+                  <p className="rewardStatus">
+                    {transaction.created_at
+                      ? new Date(transaction.created_at).toLocaleDateString()
+                      : "Recent"}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+      )}
+
+      {myTeamTab === "history" && (
       <section className="teamDashboardCard">
         <p className="eyebrow">Points History</p>
         {pointHistory.length === 0 ? (
@@ -4906,29 +5139,41 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
           </div>
         )}
       </section>
+      )}
 
+      {myTeamTab === "overview" && (
       <section className="teamDashboardCard">
         <p className="eyebrow">Saved / Shared Events</p>
         <h3>{fanStats.eventsShared} shared</h3>
         <p>Saved events will appear here when that feature is added.</p>
       </section>
+      )}
 
+      {myTeamTab === "overview" && (
       <section className="teamDashboardCard">
         <p className="eyebrow">Following</p>
         <h3>0 following</h3>
         <p>Followed artists, venues, and producers will appear here later.</p>
       </section>
+      )}
 
+      {myTeamTab === "tickets" && (
       <section className="teamDashboardCard">
         <p className="eyebrow">My Tickets</p>
         {fanTicketReservations.length === 0 ? (
           <>
             <h3>No tickets yet</h3>
             <p>Free RSVPs and reserved tickets will appear here.</p>
+            <button className="primaryBtn" type="button" onClick={() => goToTab("fan")}>
+              Browse Shows
+            </button>
           </>
         ) : (
           <div className="rewardsList">
-            {fanTicketReservations.map((reservation) => (
+            {upcomingFanTicketReservations.length > 0 && (
+              <h3 className="ticketGroupTitle">Upcoming</h3>
+            )}
+            {upcomingFanTicketReservations.map((reservation) => (
               <div className="rewardCard" key={reservation.id}>
                 <div>
                   <h3>{reservation.eventTitle}</h3>
@@ -4965,14 +5210,41 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                         }`
                       : "Not checked in"}
                   </p>
+                  <div className="eventActions">
+                    {reservation.confirmation_code && isTicketQrActive(reservation) && (
+                      <button
+                        className="secondaryBtn"
+                        type="button"
+                        onClick={() => toggleTicketQr(reservation.id)}
+                      >
+                        {visibleTicketQrIds[reservation.id]
+                          ? "Hide QR Code"
+                          : "View QR Code"}
+                      </button>
+                    )}
+                    {events.some((event) => event.id === reservation.event_id) && (
+                      <button
+                        className="secondaryBtn"
+                        type="button"
+                        onClick={() =>
+                          shareEvent(events.find((event) => event.id === reservation.event_id))
+                        }
+                      >
+                        Share This Show
+                      </button>
+                    )}
+                  </div>
                 </div>
-                {reservation.confirmation_code && isTicketQrActive(reservation) ? (
+                {reservation.confirmation_code &&
+                isTicketQrActive(reservation) &&
+                visibleTicketQrIds[reservation.id] ? (
                   <img
                     className="ticketQr"
                     src={getTicketQrImageUrl(reservation)}
                     alt={`QR code for ${reservation.confirmation_code}`}
                   />
-                ) : (
+                ) : reservation.confirmation_code &&
+                  !isTicketQrActive(reservation) ? (
                   <div className="ticketQr disabledQr">
                     <span>
                       {reservation.status === "pending_payment"
@@ -4980,14 +5252,45 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                         : "QR unavailable"}
                     </span>
                   </div>
-                )}
+                ) : null}
+              </div>
+            ))}
+            {pastFanTicketReservations.length > 0 && (
+              <h3 className="ticketGroupTitle">Past</h3>
+            )}
+            {pastFanTicketReservations.map((reservation) => (
+              <div className="rewardCard" key={reservation.id}>
+                <div>
+                  <h3>{reservation.eventTitle}</h3>
+                  <p>
+                    {reservation.ticketTypeName} · Qty {reservation.quantity} ·{" "}
+                    {formatTicketStatus(reservation.status)}
+                  </p>
+                  <p className="rewardStatus">
+                    {reservation.eventDate} {reservation.eventTime}
+                    {reservation.eventVenue || reservation.eventCity
+                      ? ` · ${[reservation.eventVenue, reservation.eventCity]
+                          .filter(Boolean)
+                          .join(" · ")}`
+                      : ""}
+                  </p>
+                  {reservation.confirmation_code && (
+                    <p className="rewardStatus">
+                      Confirmation: <strong>{reservation.confirmation_code}</strong>
+                    </p>
+                  )}
+                  <p className="rewardStatus">
+                    {reservation.checked_in ? "Checked in" : "Not checked in"}
+                  </p>
+                </div>
               </div>
             ))}
           </div>
         )}
       </section>
+      )}
 
-      {redemptions.length > 0 && (
+      {myTeamTab === "rewards" && redemptions.length > 0 && (
         <section className="teamDashboardCard">
           <p className="eyebrow">Reward Requests</p>
           <div className="rewardsList">
@@ -5222,30 +5525,6 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
     )}
   </section>
 )}
-        {activeTab === "account" && (
-          <>
-            {user ? (
-              <section className="panel">
-                <p className="eyebrow">Account</p>
-                <h1>You are logged in.</h1>
-                <p>
-                  Account: <strong>{user.email}</strong>
-                </p>
-                <p>
-                  Roles:{" "}
-                  <strong>
-                    {userRoles.length > 0 ? userRoles.join(", ") : "Loading"}
-                  </strong>
-                </p>
-                <button className="dangerBtn" type="button" onClick={handleLogout}>
-                  Log Out
-                </button>
-              </section>
-            ) : (
-              renderAuthPanel(false)
-            )}
-          </>
-        )}
       </main>
     </div>
   );
