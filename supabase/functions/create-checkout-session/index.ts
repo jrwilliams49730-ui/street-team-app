@@ -6,17 +6,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-function getTicketDiscountCents(redemption: { reward_label?: string } | null, originalTotalCents: number) {
-  const label = redemption?.reward_label || "";
-  const match = label.match(/\$(\d+(?:\.\d{1,2})?)\s+off\s+ticket/i);
-
-  if (!match) {
-    return 0;
-  }
-
-  return Math.min(originalTotalCents, Math.round(Number(match[1]) * 100));
-}
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -119,24 +108,6 @@ Deno.serve(async (req) => {
 
     const originalTotalCents = Math.round(Number(ticketType.price) * 100) * requestedQuantity;
 
-    const { data: approvedDiscounts } = await serviceSupabase
-      .from("reward_redemptions")
-      .select("id, reward_label")
-      .eq("user_id", userData.user.id)
-      .eq("status", "approved")
-      .is("used_at", null)
-      .order("created_at", { ascending: true });
-
-    const appliedDiscount = (approvedDiscounts || []).find(
-      (redemption) => getTicketDiscountCents(redemption, originalTotalCents) > 0,
-    ) || null;
-    const discountCents = getTicketDiscountCents(appliedDiscount, originalTotalCents);
-    const finalTotalCents = Math.max(0, originalTotalCents - discountCents);
-
-    if (finalTotalCents < 50) {
-      throw new Error("This reward makes the checkout total too low for Stripe. Use a different reward or contact support.");
-    }
-
     const { data: reservation, error: reservationError } = await userSupabase.rpc(
       "create_paid_ticket_reservation",
       {
@@ -160,16 +131,14 @@ Deno.serve(async (req) => {
               currency: "usd",
               product_data: {
                 name: `${eventData.title} - ${ticketType.name}`,
-                description:
-                  discountCents > 0
-                    ? `${requestedQuantity} ticket(s). Street Team reward applied: -$${(discountCents / 100).toFixed(2)}.`
-                    : ticketType.description || undefined,
+                description: ticketType.description || undefined,
               },
-              unit_amount: finalTotalCents,
+              unit_amount: Math.round(Number(ticketType.price) * 100),
             },
-            quantity: 1,
+            quantity: requestedQuantity,
           },
         ],
+        allow_promotion_codes: true,
         success_url: `${siteUrl}/?ticket_checkout=success&session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${siteUrl}/?ticket_checkout=cancelled&event=${eventId}&reservation_id=${reservation.id}`,
         customer_email: userData.user.email || undefined,
@@ -180,8 +149,6 @@ Deno.serve(async (req) => {
           user_id: userData.user.id,
           quantity: String(requestedQuantity),
           original_amount_total: String(originalTotalCents),
-          discount_amount: String(discountCents),
-          ...(appliedDiscount?.id ? { applied_redemption_id: String(appliedDiscount.id) } : {}),
           ...(checkoutShareCode ? { share_code: checkoutShareCode } : {}),
         },
       });
@@ -191,9 +158,8 @@ Deno.serve(async (req) => {
         .update({
           stripe_session_id: session.id,
           checkout_share_code: checkoutShareCode,
-          applied_redemption_id: appliedDiscount?.id ? String(appliedDiscount.id) : null,
           original_amount_total: originalTotalCents,
-          discount_amount: discountCents,
+          discount_amount: 0,
           amount_total: session.amount_total,
           currency: session.currency || "usd",
           updated_at: new Date().toISOString(),

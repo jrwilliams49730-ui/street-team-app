@@ -87,6 +87,15 @@ Deno.serve(async (req) => {
       throw new Error("Checkout session is missing order metadata.");
     }
 
+    const completedSession = await stripe.checkout.sessions.retrieve(session.id, {
+      expand: [
+        "discounts.promotion_code",
+        "discounts.coupon",
+        "total_details.breakdown.discounts.discount.promotion_code",
+        "total_details.breakdown.discounts.discount.coupon",
+      ],
+    } as Stripe.Checkout.SessionRetrieveParams);
+
     const { error } = await supabase.rpc("mark_ticket_reservation_paid", {
       p_reservation_id: orderId,
       p_stripe_session_id: session.id,
@@ -94,8 +103,8 @@ Deno.serve(async (req) => {
         typeof session.payment_intent === "string"
           ? session.payment_intent
           : session.payment_intent?.id || "",
-      p_amount_total: session.amount_total || 0,
-      p_currency: session.currency || "usd",
+      p_amount_total: completedSession.amount_total || session.amount_total || 0,
+      p_currency: completedSession.currency || session.currency || "usd",
     });
 
     if (error) {
@@ -125,9 +134,31 @@ Deno.serve(async (req) => {
       throw new Error(pointsError.message);
     }
 
-    if (session.metadata?.applied_redemption_id) {
+    const directDiscounts = ((completedSession as unknown as { discounts?: unknown[] }).discounts || []);
+    const breakdownDiscounts =
+      (completedSession as unknown as {
+        total_details?: { breakdown?: { discounts?: Array<{ discount?: unknown }> } };
+      }).total_details?.breakdown?.discounts?.map((item) => item.discount) || [];
+    const allDiscounts = [...directDiscounts, ...breakdownDiscounts];
+    const usedDiscount = allDiscounts[0] as
+      | {
+          coupon?: string | { id?: string };
+          promotion_code?: string | { id?: string; code?: string };
+        }
+      | undefined;
+    const usedPromotionCode = usedDiscount?.promotion_code;
+    const usedCoupon = usedDiscount?.coupon;
+    const promotionCodeId =
+      typeof usedPromotionCode === "string" ? usedPromotionCode : usedPromotionCode?.id || "";
+    const couponCode =
+      typeof usedPromotionCode === "object" ? usedPromotionCode?.code || "" : "";
+    const couponId = typeof usedCoupon === "string" ? usedCoupon : usedCoupon?.id || "";
+
+    if (promotionCodeId || couponId || couponCode) {
       const { error: discountError } = await supabase.rpc("mark_ticket_discount_used", {
-        p_redemption_id: session.metadata.applied_redemption_id,
+        p_stripe_promotion_code_id: promotionCodeId || null,
+        p_stripe_coupon_id: couponId || null,
+        p_coupon_code: couponCode || null,
         p_reservation_id: orderId,
         p_stripe_session_id: session.id,
       });

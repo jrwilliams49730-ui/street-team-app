@@ -5,8 +5,11 @@ import { supabase } from "./supabaseClient";
 const emptyForm = {
   title: "",
   type: "Comedy",
-  venue: "",
+  venueName: "",
+  streetAddress: "",
   city: "",
+  state: "",
+  zipCode: "",
   date: "",
   time: "",
   price: "",
@@ -21,8 +24,11 @@ const emptyForm = {
 const emptyEditForm = {
   title: "",
   type: "Comedy",
-  venue: "",
+  venueName: "",
+  streetAddress: "",
   city: "",
+  state: "",
+  zipCode: "",
   date: "",
   time: "",
   price: "",
@@ -52,6 +58,9 @@ const fanEventTypeOptions = [
   "Family Events",
   "Nightlife",
 ];
+
+const geocodeErrorMessage =
+  "We could not verify this address. Please check the venue address and zip code.";
 
 const rewardTiers = [
   {
@@ -298,12 +307,23 @@ function getPointHistoryLabel(transaction) {
   return transaction.description || "Points";
 }
 
-function getTicketDiscountDollars(redemption) {
-  const match = String(redemption?.reward_label || "").match(
-    /\$(\d+(?:\.\d{1,2})?)\s+off\s+ticket/i
-  );
+function getRewardConfig(reward) {
+  const label = String(reward?.label || reward?.reward_label || "");
+  const amountMatch = label.match(/\$(\d+(?:\.\d{1,2})?)\s+off\s+ticket/i);
+  const isGiftCard = /gift card/i.test(label);
+  const isFreeTicket = /^free\s+/i.test(label) && /ticket/i.test(label);
+  const isTicketReward = amountMatch || isFreeTicket;
+  const isVip = /vip|premium/i.test(label);
+  const isGa = /\bga\b|general admission/i.test(label);
 
-  return match ? Number(match[1]) : 0;
+  return {
+    rewardId: label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""),
+    rewardType: isGiftCard ? "gift_card" : isTicketReward ? amountMatch ? "ticket_discount" : "free_ticket" : "other",
+    discountAmountCents: amountMatch ? Math.round(Number(amountMatch[1]) * 100) : null,
+    percentOff: isFreeTicket ? 100 : null,
+    eligibleTicketType: isVip ? "vip" : isGa ? "ga" : "any",
+    stripeEnabled: Boolean(isTicketReward && !isGiftCard),
+  };
 }
 
 function dedupeTicketReservations(reservations) {
@@ -391,6 +411,49 @@ function getDistanceMiles(fromLocation, event) {
       Math.sin(lonDelta / 2);
 
   return earthRadiusMiles * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function getEventAddressSignature(source) {
+  return [
+    source?.venueName || source?.venue || "",
+    source?.streetAddress || "",
+    source?.city || "",
+    source?.state || "",
+    source?.zipCode || "",
+  ]
+    .map((part) => String(part || "").trim().toLowerCase())
+    .join("|");
+}
+
+function hasCompleteEventAddress(source) {
+  return Boolean(
+    String(source?.venueName || source?.venue || "").trim() &&
+      String(source?.streetAddress || "").trim() &&
+      String(source?.city || "").trim() &&
+      String(source?.state || "").trim() &&
+      String(source?.zipCode || "").trim()
+  );
+}
+
+async function geocodeEventAddress(addressSource) {
+  const { data, error } = await supabase.functions.invoke("geocode-address", {
+    body: {
+      venue_name: addressSource.venueName || addressSource.venue || "",
+      street_address: addressSource.streetAddress || "",
+      city: addressSource.city || "",
+      state: addressSource.state || "",
+      zip_code: addressSource.zipCode || "",
+    },
+  });
+
+  if (error || data?.error || !Number.isFinite(Number(data?.latitude)) || !Number.isFinite(Number(data?.longitude))) {
+    throw new Error(data?.error || error?.message || geocodeErrorMessage);
+  }
+
+  return {
+    latitude: Number(data.latitude),
+    longitude: Number(data.longitude),
+  };
 }
 
 async function copyShareLinkToClipboard(shareLink) {
@@ -542,8 +605,12 @@ function fromDbEvent(item) {
     id: item.id,
     title: item.title,
     type: item.type,
-    venue: item.venue,
+    venue: item.venue_name || item.venue,
+    venueName: item.venue_name || item.venue || "",
+    streetAddress: item.street_address || "",
     city: item.city,
+    state: item.state || "",
+    zipCode: item.zip_code || "",
     date: item.event_date,
     time: item.event_time,
     price: item.price,
@@ -636,10 +703,8 @@ function App() {
     (redemption) =>
       redemption.status === "approved" &&
       !redemption.used_at &&
-      getTicketDiscountDollars(redemption) > 0
-  );
-  const approvedTicketDiscountDollars = getTicketDiscountDollars(
-    approvedTicketDiscountRedemption
+      redemption.coupon_code &&
+      redemption.stripe_enabled
   );
 
   const nextReward =
@@ -686,6 +751,7 @@ function App() {
       : "unavailable"
   );
   const [radiusMiles, setRadiusMiles] = useState(25);
+  const [eventLocationSearch, setEventLocationSearch] = useState("");
   const [shareMessage, setShareMessage] = useState("");
   const [shareStats, setShareStats] = useState({});
   const [, setIsLoadingShareStats] = useState(false);
@@ -1337,6 +1403,26 @@ async function submitAdminPointAdjustment(event) {
 }
 
 async function updateRedemptionStatus(redemptionId, status) {
+  if (status === "approved") {
+    const { data, error } = await supabase.functions.invoke("approve-redemption", {
+      body: {
+        redemption_id: String(redemptionId),
+      },
+    });
+
+    if (error || data?.error) {
+      console.error(error || data?.error);
+      setOwnerMessage(
+        `Could not approve redemption. ${data?.error || error?.message || ""}`
+      );
+      return;
+    }
+
+    setOwnerMessage("Reward request approved.");
+    await loadOwnerDashboard();
+    return;
+  }
+
   const { error } = await supabase.rpc("admin_update_redemption_status", {
     p_redemption_id: String(redemptionId),
     p_status: status,
@@ -1476,6 +1562,7 @@ async function requestRewardRedemption(reward) {
 
   setIsRedeemingReward(true);
   setRedemptionMessage("");
+  const rewardConfig = getRewardConfig(reward);
 
   const { data: redemption, error } = await supabase
     .from("reward_redemptions")
@@ -1485,6 +1572,12 @@ async function requestRewardRedemption(reward) {
       fan_email: fanEmail,
       reward_label: reward.label,
       points_cost: reward.points,
+      reward_id: rewardConfig.rewardId,
+      reward_type: rewardConfig.rewardType,
+      discount_amount_cents: rewardConfig.discountAmountCents,
+      percent_off: rewardConfig.percentOff,
+      eligible_ticket_type: rewardConfig.eligibleTicketType,
+      stripe_enabled: rewardConfig.stripeEnabled,
       status: "pending",
     })
     .select()
@@ -2697,8 +2790,8 @@ async function saveFanProfileForm(event) {
       return;
     }
 
-    if (!form.title || !form.venue || !form.city || !form.date || !form.time) {
-      alert("Fill out the event name, venue, city, date, and time first.");
+    if (!form.title || !hasCompleteEventAddress(form) || !form.date || !form.time) {
+      alert("Fill out the event name, venue address, city, state, zip code, date, and time first.");
       return;
     }
 
@@ -2716,6 +2809,15 @@ async function saveFanProfileForm(event) {
     const eventPriceLabel = form.isTicketed
       ? getEventPriceFromTicketTypes(form.ticketTypes)
       : "Free";
+    let coordinates;
+
+    try {
+      coordinates = await geocodeEventAddress(form);
+    } catch (error) {
+      console.error(error);
+      alert(geocodeErrorMessage);
+      return;
+    }
 
     let uploadedFlyer = {
       publicUrl: "",
@@ -2736,10 +2838,16 @@ async function saveFanProfileForm(event) {
     const eventToCreate = {
       title: form.title,
       type: form.type,
-      venue: form.venue,
+      venue: form.venueName,
+      venue_name: form.venueName,
+      street_address: form.streetAddress,
       city: form.city,
+      state: form.state,
+      zip_code: form.zipCode,
       event_date: formatDate(form.date),
       event_time: formatTime(form.time),
+      latitude: coordinates.latitude,
+      longitude: coordinates.longitude,
       price: eventPriceLabel,
       points: 10,
       is_ticketed: form.isTicketed,
@@ -2798,8 +2906,11 @@ async function saveFanProfileForm(event) {
     setEditForm({
       title: event.title || "",
       type: event.type || "Comedy",
-      venue: event.venue || "",
+      venueName: event.venueName || event.venue || "",
+      streetAddress: event.streetAddress || "",
       city: event.city || "",
+      state: event.state || "",
+      zipCode: event.zipCode || "",
       date: event.date || "",
       time: event.time || "",
       price: cleanPriceForEdit(event.price),
@@ -2830,18 +2941,37 @@ async function saveFanProfileForm(event) {
 
     if (
       !editForm.title ||
-      !editForm.venue ||
-      !editForm.city ||
+      !hasCompleteEventAddress(editForm) ||
       !editForm.date ||
       !editForm.time
     ) {
-      alert("Fill out the event name, venue, city, date, and time first.");
+      alert("Fill out the event name, venue address, city, state, zip code, date, and time first.");
       return;
     }
 
     const eventPriceLabel = editForm.isTicketed
       ? getEventPriceFromTicketTypes(editForm.ticketTypes)
       : "Free";
+    const addressChanged =
+      getEventAddressSignature(editForm) !== getEventAddressSignature(originalEvent);
+    let coordinates = {
+      latitude: originalEvent?.latitude,
+      longitude: originalEvent?.longitude,
+    };
+
+    if (
+      addressChanged ||
+      !Number.isFinite(Number(coordinates.latitude)) ||
+      !Number.isFinite(Number(coordinates.longitude))
+    ) {
+      try {
+        coordinates = await geocodeEventAddress(editForm);
+      } catch (error) {
+        console.error(error);
+        alert(geocodeErrorMessage);
+        return;
+      }
+    }
 
     let finalFlyerImage = editForm.flyerImage;
     let finalFlyerName = editForm.flyerName;
@@ -2873,10 +3003,16 @@ async function saveFanProfileForm(event) {
     const updatedEvent = {
       title: editForm.title,
       type: editForm.type,
-      venue: editForm.venue,
+      venue: editForm.venueName,
+      venue_name: editForm.venueName,
+      street_address: editForm.streetAddress,
       city: editForm.city,
+      state: editForm.state,
+      zip_code: editForm.zipCode,
       event_date: editForm.date,
       event_time: editForm.time,
+      latitude: coordinates.latitude,
+      longitude: coordinates.longitude,
       price: eventPriceLabel,
       points: 10,
       is_ticketed: editForm.isTicketed,
@@ -3002,28 +3138,46 @@ const hasAnyEventCoordinates = eventsWithDistance.some(
   (event) => event.distanceMiles !== null
 );
 
+const normalizedLocationSearch = eventLocationSearch.trim().toLowerCase();
+const eventsMatchingLocationSearch = normalizedLocationSearch
+  ? eventsWithDistance.filter((event) =>
+      [
+        event.venue,
+        event.venueName,
+        event.streetAddress,
+        event.city,
+        event.state,
+        event.zipCode,
+      ]
+        .filter(Boolean)
+        .some((value) =>
+          String(value).toLowerCase().includes(normalizedLocationSearch)
+        )
+    )
+  : eventsWithDistance;
+
 const visibleEvents =
   userLocation && hasAnyEventCoordinates
     ? eventsWithDistance
         .filter(
           (event) =>
-            event.distanceMiles === null || event.distanceMiles <= radiusMiles
+            event.distanceMiles !== null && event.distanceMiles <= radiusMiles
         )
         .sort((firstEvent, secondEvent) => {
           if (firstEvent.distanceMiles === null) return 1;
           if (secondEvent.distanceMiles === null) return -1;
           return firstEvent.distanceMiles - secondEvent.distanceMiles;
         })
-    : eventsWithDistance;
+    : eventsMatchingLocationSearch;
 
 const locationMessage = userLocation
   ? hasAnyEventCoordinates
-    ? `Showing events within ${radiusMiles} miles when event coordinates are available.`
+    ? `Showing events within ${radiusMiles} miles.`
     : "Location is on. Showing all events until event coordinates are added."
   : locationStatus === "denied"
-  ? "Location was not shared. Showing all upcoming events instead."
+  ? "Location was not shared. Search by city or zip code instead."
   : locationStatus === "unavailable"
-  ? "Location is not available in this browser. Showing all upcoming events."
+  ? "Location is not available in this browser. Search by city or zip code instead."
   : "Checking location. Showing all upcoming events until nearby results are available.";
 
 const selectedEventTicketTypes = selectedEvent
@@ -3978,6 +4132,11 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                             ? new Date(item.created_at).toLocaleString()
                             : "Unknown date"}
                         </p>
+                        {item.coupon_code && (
+                          <p className="rewardStatus">
+                            Code: <strong>{item.coupon_code}</strong>
+                          </p>
+                        )}
                       </div>
                       <select
                         value={item.status || "pending"}
@@ -3987,8 +4146,8 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                       >
                         <option value="pending">pending</option>
                         <option value="approved">approved</option>
-                        <option value="fulfilled">fulfilled</option>
-                        <option value="rejected">rejected</option>
+                        <option value="used">used</option>
+                        <option value="denied">denied</option>
                         <option value="failed">failed</option>
                       </select>
                     </div>
@@ -4295,18 +4454,30 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
             </section>
 
             <div className="discoveryControls">
-              <label className="formField">
-                Radius
-                <select
-                  value={radiusMiles}
-                  onChange={(e) => setRadiusMiles(Number(e.target.value))}
-                >
-                  <option value={10}>10 miles</option>
-                  <option value={25}>25 miles</option>
-                  <option value={50}>50 miles</option>
-                  <option value={100}>100 miles</option>
-                </select>
-              </label>
+              {userLocation && (
+                <label className="formField">
+                  Radius
+                  <select
+                    value={radiusMiles}
+                    onChange={(e) => setRadiusMiles(Number(e.target.value))}
+                  >
+                    <option value={5}>5 miles</option>
+                    <option value={10}>10 miles</option>
+                    <option value={25}>25 miles</option>
+                    <option value={50}>50 miles</option>
+                  </select>
+                </label>
+              )}
+              {!userLocation && (
+                <label className="formField">
+                  City or ZIP
+                  <input
+                    value={eventLocationSearch}
+                    onChange={(e) => setEventLocationSearch(e.target.value)}
+                    placeholder="Myrtle Beach or 29577"
+                  />
+                </label>
+              )}
             </div>
 
             {isLoadingEvents && <p>Loading events...</p>}
@@ -4323,8 +4494,11 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
               events.length > 0 &&
               visibleEvents.length === 0 && (
                 <section className="emptyState">
-                  <h3>No events inside that radius.</h3>
-                  <p>Try expanding the radius or check back when more shows are added.</p>
+                  <h3>No matching events.</h3>
+                  <p>
+                    Try expanding the radius, searching another city or zip code,
+                    or check back when more shows are added.
+                  </p>
                 </section>
               )}
 
@@ -4457,12 +4631,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                                 maxPaidQuantity
                               )
                             : 0;
-                        const paidSubtotal = Number(ticketType.price || 0) * paidQuantity;
-                        const paidDiscount = Math.min(
-                          paidSubtotal,
-                          approvedTicketDiscountDollars
-                        );
-                        const paidTotal = Math.max(0, paidSubtotal - paidDiscount);
+                        const paidTotal = Number(ticketType.price || 0) * paidQuantity;
                         const canCheckoutPaidTicket =
                           !isFree &&
                           !ticketType.isEventPriceFallback &&
@@ -4512,12 +4681,10 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                               )}
                               {!isFree && (!hasKnownInventory || remainingTickets > 0) && (
                                 <p className="rewardStatus">
-                                  Ticket: ${paidSubtotal.toFixed(2)}
-                                  {paidDiscount > 0
-                                    ? ` Â· Street Team reward: -$${paidDiscount.toFixed(2)}`
-                                    : ""}
-                                  {" Â· "}
                                   Total: ${paidTotal.toFixed(2)}
+                                  {approvedTicketDiscountRedemption?.coupon_code
+                                    ? " · Promo code available in Rewards"
+                                    : ""}
                                 </p>
                               )}
                             </div>
@@ -4809,12 +4976,23 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                             </label>
 
                             <label className="formField">
-                              Venue
+                              Venue Name
                               <input
-                                value={editForm.venue}
+                                value={editForm.venueName}
                                 onChange={(e) =>
-                                  updateEditForm("venue", e.target.value)
+                                  updateEditForm("venueName", e.target.value)
                                 }
+                              />
+                            </label>
+
+                            <label className="formField fullSpan">
+                              Street Address
+                              <input
+                                value={editForm.streetAddress}
+                                onChange={(e) =>
+                                  updateEditForm("streetAddress", e.target.value)
+                                }
+                                placeholder="Example: 123 Main St"
                               />
                             </label>
 
@@ -4825,6 +5003,28 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                                 onChange={(e) =>
                                   updateEditForm("city", e.target.value)
                                 }
+                              />
+                            </label>
+
+                            <label className="formField">
+                              State
+                              <input
+                                value={editForm.state}
+                                onChange={(e) =>
+                                  updateEditForm("state", e.target.value)
+                                }
+                                placeholder="SC"
+                              />
+                            </label>
+
+                            <label className="formField">
+                              Zip Code
+                              <input
+                                value={editForm.zipCode}
+                                onChange={(e) =>
+                                  updateEditForm("zipCode", e.target.value)
+                                }
+                                placeholder="29575"
                               />
                             </label>
 
@@ -5140,11 +5340,20 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                 </label>
 
                 <label className="formField">
-                  Venue
+                  Venue Name
                   <input
-                    value={form.venue}
-                    onChange={(e) => updateForm("venue", e.target.value)}
+                    value={form.venueName}
+                    onChange={(e) => updateForm("venueName", e.target.value)}
                     placeholder="Example: Harry the Hats"
+                  />
+                </label>
+
+                <label className="formField fullSpan">
+                  Street Address
+                  <input
+                    value={form.streetAddress}
+                    onChange={(e) => updateForm("streetAddress", e.target.value)}
+                    placeholder="Example: 123 Main St"
                   />
                 </label>
 
@@ -5153,7 +5362,25 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                   <input
                     value={form.city}
                     onChange={(e) => updateForm("city", e.target.value)}
-                    placeholder="Example: Surfside Beach, SC"
+                    placeholder="Example: Surfside Beach"
+                  />
+                </label>
+
+                <label className="formField">
+                  State
+                  <input
+                    value={form.state}
+                    onChange={(e) => updateForm("state", e.target.value)}
+                    placeholder="SC"
+                  />
+                </label>
+
+                <label className="formField">
+                  Zip Code
+                  <input
+                    value={form.zipCode}
+                    onChange={(e) => updateForm("zipCode", e.target.value)}
+                    placeholder="29575"
                   />
                 </label>
 
@@ -5672,7 +5899,34 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                     {redemption.points_cost?.toLocaleString()} points Â·{" "}
                     {redemption.status || "pending"}
                   </p>
+                  {redemption.coupon_code && (
+                    <>
+                      <p className="rewardStatus">
+                        Code: <strong>{redemption.coupon_code}</strong>
+                      </p>
+                      <p className="rewardStatus">
+                        Copy this code and paste it in checkout to apply your ticket reward.
+                      </p>
+                    </>
+                  )}
+                  {redemption.used_at && (
+                    <p className="rewardStatus">
+                      Used {new Date(redemption.used_at).toLocaleString()}
+                    </p>
+                  )}
                 </div>
+                {redemption.coupon_code && (
+                  <button
+                    className="secondaryBtn"
+                    type="button"
+                    disabled={Boolean(redemption.used_at) || redemption.status === "used"}
+                    onClick={() => navigator.clipboard?.writeText(redemption.coupon_code)}
+                  >
+                    {redemption.used_at || redemption.status === "used"
+                      ? "Used"
+                      : "Copy Code"}
+                  </button>
+                )}
               </div>
             ))}
           </div>
