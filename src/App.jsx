@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import { supabase } from "./supabaseClient";
 
@@ -620,6 +620,10 @@ function App() {
   const [isOwnerDashboardLoading, setIsOwnerDashboardLoading] = useState(false);
   const [ownerMessage, setOwnerMessage] = useState("");
   const [ownerSearch, setOwnerSearch] = useState("");
+  const [ownerAdminTab, setOwnerAdminTab] = useState("overview");
+  const [ownerUserRoleFilter, setOwnerUserRoleFilter] = useState("all");
+  const [ownerEventStatusFilter, setOwnerEventStatusFilter] = useState("all");
+  const [ownerPointTypeFilter, setOwnerPointTypeFilter] = useState("all");
   const [ownerPointsSourceFilter, setOwnerPointsSourceFilter] = useState("all");
   const [adminAdjustmentForm, setAdminAdjustmentForm] = useState({
     userId: "",
@@ -1358,6 +1362,84 @@ async function updateRedemptionStatus(redemptionId, status) {
   );
   setOwnerMessage(`Reward request marked ${status}.`);
   await loadOwnerDashboard();
+}
+
+async function updateAdminUserRole(userId, role, enabled) {
+  const { error } = await supabase.rpc("admin_set_user_role", {
+    p_user_id: userId,
+    p_role: role,
+    p_enabled: enabled,
+  });
+
+  if (error) {
+    console.error(error);
+    setOwnerMessage(`Could not update user role. ${error.message}`);
+    return;
+  }
+
+  setOwnerMessage(`${role} role ${enabled ? "added" : "removed"}.`);
+  await loadOwnerDashboard();
+}
+
+async function updateAdminUserActive(userId, isActive) {
+  const note = isActive
+    ? "Reactivated from Street Team HQ"
+    : "Deactivated from Street Team HQ";
+
+  const { error } = await supabase.rpc("admin_set_user_active", {
+    p_user_id: userId,
+    p_is_active: isActive,
+    p_note: note,
+  });
+
+  if (error) {
+    console.error(error);
+    setOwnerMessage(`Could not update user status. ${error.message}`);
+    return;
+  }
+
+  setOwnerMessage(isActive ? "User reactivated." : "User deactivated.");
+  await loadOwnerDashboard();
+}
+
+async function updateAdminEventStatus(eventId, status) {
+  const { error } = await supabase.rpc("admin_update_event_status", {
+    p_event_id: eventId,
+    p_status: status,
+  });
+
+  if (error) {
+    console.error(error);
+    setOwnerMessage(`Could not update event. ${error.message}`);
+    return;
+  }
+
+  setOwnerMessage(`Event marked ${status}.`);
+  await loadOwnerDashboard();
+  await loadEventsFromSupabase();
+}
+
+async function deleteAdminEventIfSafe(eventId) {
+  const eventToDelete = ownerEvents.find((event) => event.id === eventId);
+  const confirmed = window.confirm(
+    `Delete ${eventToDelete?.title || "this event"}? This only works when no ticket history exists.`
+  );
+
+  if (!confirmed) return;
+
+  const { error } = await supabase.rpc("admin_delete_event_if_safe", {
+    p_event_id: eventId,
+  });
+
+  if (error) {
+    console.error(error);
+    setOwnerMessage(`Could not delete event. ${error.message}`);
+    return;
+  }
+
+  setOwnerMessage("Event deleted.");
+  await loadOwnerDashboard();
+  await loadEventsFromSupabase();
 }
 
 async function requestRewardRedemption(reward) {
@@ -3124,6 +3206,35 @@ const ownerTickets = ownerDashboard?.tickets || [];
 const ownerRedemptions = ownerDashboard?.redemptions || [];
 const ownerPoints = ownerDashboard?.points || [];
 const ownerSuspicious = ownerDashboard?.suspicious || [];
+const ownerTotals = ownerDashboard?.totals || {};
+const pendingOwnerRedemptions = ownerRedemptions.filter(
+  (item) => item.status === "pending"
+);
+const totalOwnerTicketSalesCents = Number(ownerTotals.ticket_sales_cents || 0);
+const recentOwnerActivity = [
+  ...ownerRedemptions.map((item) => ({
+    id: `redemption-${item.id}`,
+    type: "Redemption",
+    label: item.reward_label,
+    detail: item.user_email || item.fan_email || item.user_id,
+    created_at: item.created_at,
+  })),
+  ...ownerPoints.map((item) => ({
+    id: `points-${item.id}`,
+    type: "Points",
+    label: `${Number(item.points || 0) > 0 ? "+" : ""}${Number(
+      item.points || 0
+    ).toLocaleString()} points`,
+    detail: item.description || item.source || item.transaction_type,
+    created_at: item.created_at,
+  })),
+]
+  .filter((item) => item.created_at)
+  .sort(
+    (first, second) =>
+      new Date(second.created_at).getTime() - new Date(first.created_at).getTime()
+  )
+  .slice(0, 8);
 
 const matchesOwnerSearch = (values) =>
   !ownerSearchText ||
@@ -3131,18 +3242,42 @@ const matchesOwnerSearch = (values) =>
     .filter(Boolean)
     .some((value) => String(value).toLowerCase().includes(ownerSearchText));
 
-const visibleOwnerUsers = ownerUsers.filter((item) =>
-  matchesOwnerSearch([
-    item.email,
-    item.profile_email,
-    item.display_name,
-    item.roles?.join(" "),
-  ])
-);
+const visibleOwnerUsers = ownerUsers.filter((item) => {
+  const roles = item.roles || [];
+  const matchesRole =
+    ownerUserRoleFilter === "all" ||
+    (ownerUserRoleFilter === "active" && item.is_active !== false) ||
+    (ownerUserRoleFilter === "deactivated" && item.is_active === false) ||
+    roles.includes(ownerUserRoleFilter);
 
-const visibleOwnerEvents = ownerEvents.filter((item) =>
-  matchesOwnerSearch([item.title, item.venue, item.city, item.owner_email])
-);
+  return (
+    matchesRole &&
+    matchesOwnerSearch([
+      item.email,
+      item.profile_email,
+      item.display_name,
+      roles.join(" "),
+    ])
+  );
+});
+
+const visibleOwnerEvents = ownerEvents.filter((item) => {
+  const status = item.status || "active";
+  const matchesStatus =
+    ownerEventStatusFilter === "all" || status === ownerEventStatusFilter;
+
+  return (
+    matchesStatus &&
+    matchesOwnerSearch([
+      item.title,
+      item.venue,
+      item.city,
+      item.owner_email,
+      status,
+      item.event_date,
+    ])
+  );
+});
 
 const visibleOwnerTickets = ownerTickets.filter((item) =>
   matchesOwnerSearch([
@@ -3166,17 +3301,25 @@ const visibleOwnerRedemptions = ownerRedemptions.filter((item) =>
 
 const visibleOwnerPoints = ownerPoints.filter((item) => {
   const source = item.source || item.transaction_type || "";
+  const points = Number(item.points || 0);
   const matchesSource =
     ownerPointsSourceFilter === "all" || source === ownerPointsSourceFilter;
+  const matchesType =
+    ownerPointTypeFilter === "all" ||
+    (ownerPointTypeFilter === "earned" && points > 0) ||
+    (ownerPointTypeFilter === "redeemed" && points < 0);
 
   return (
     matchesSource &&
+    matchesType &&
     matchesOwnerSearch([
       item.user_email,
       item.source,
       item.transaction_type,
       item.description,
       item.reward_label,
+      item.reference_id,
+      item.ticket_reservation_id,
     ])
   );
 });
@@ -3496,34 +3639,87 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                 </button>
               </div>
 
+              <div className="tabs sectionTabs">
+                {[
+                  ["overview", "Overview"],
+                  ["users", "Users"],
+                  ["events", "Events"],
+                  ["redemptions", "Redemptions"],
+                  ["points", "Points / Logs"],
+                ].map(([tabId, label]) => (
+                  <button
+                    className={ownerAdminTab === tabId ? "tab active" : "tab"}
+                    key={tabId}
+                    type="button"
+                    onClick={() => setOwnerAdminTab(tabId)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
               <label className="formField">
                 Search
                 <input
                   value={ownerSearch}
                   onChange={(event) => setOwnerSearch(event.target.value)}
-                  placeholder="Name, email, event, ticket, or code"
+                  placeholder="Name, email, event, ticket, code, or reference"
                 />
               </label>
 
+              {ownerAdminTab === "overview" && (
               <div className="producerGrid">
                 <div className="miniCard">
                   <strong>{ownerUsers.length}</strong>
-                  <span>Users</span>
-                </div>
-                <div className="miniCard">
-                  <strong>{ownerProducers.length}</strong>
-                  <span>Producers</span>
+                  <span>Total Users</span>
                 </div>
                 <div className="miniCard">
                   <strong>{ownerEvents.length}</strong>
-                  <span>Events</span>
+                  <span>Total Events</span>
                 </div>
                 <div className="miniCard">
-                  <strong>{ownerTickets.length}</strong>
-                  <span>Tickets / Orders</span>
+                  <strong>{pendingOwnerRedemptions.length}</strong>
+                  <span>Pending Redemptions</span>
+                </div>
+                <div className="miniCard">
+                  <strong>${(totalOwnerTicketSalesCents / 100).toFixed(2)}</strong>
+                  <span>Ticket Sales</span>
                 </div>
               </div>
+              )}
 
+              {ownerAdminTab === "overview" && (
+              <section className="managerSection">
+                <div className="sectionHeader smallHeader">
+                  <h2>Recent Activity</h2>
+                  <p>Latest redemption and points ledger activity.</p>
+                </div>
+                <div className="rewardsList">
+                  {recentOwnerActivity.length === 0 ? (
+                    <div className="rewardCard">
+                      <div>
+                        <h3>No recent activity.</h3>
+                        <p>New activity will appear here.</p>
+                      </div>
+                    </div>
+                  ) : (
+                    recentOwnerActivity.map((item) => (
+                      <div className="rewardCard" key={item.id}>
+                        <div>
+                          <h3>{item.type}: {item.label}</h3>
+                          <p>{item.detail || "System activity"}</p>
+                          <p className="rewardStatus">
+                            {new Date(item.created_at).toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </section>
+              )}
+
+              {ownerAdminTab === "points" && (
               <section className="managerSection">
                 <div className="sectionHeader smallHeader">
                   <h2>Manual Points Adjustment</h2>
@@ -3583,12 +3779,28 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                   </button>
                 </form>
               </section>
+              )}
 
+              {ownerAdminTab === "users" && (
               <section className="managerSection">
                 <div className="sectionHeader smallHeader">
                   <h2>Users</h2>
-                  <p>Account basics, roles, and point balances.</p>
+                  <p>Account basics, roles, point balances, and safe deactivation.</p>
                 </div>
+                <label className="formField">
+                  Role / Status
+                  <select
+                    value={ownerUserRoleFilter}
+                    onChange={(event) => setOwnerUserRoleFilter(event.target.value)}
+                  >
+                    <option value="all">All users</option>
+                    <option value="fan">Fans</option>
+                    <option value="producer">Producers</option>
+                    <option value="admin">Admins</option>
+                    <option value="active">Active</option>
+                    <option value="deactivated">Deactivated</option>
+                  </select>
+                </label>
                 <div className="rewardsList">
                   {visibleOwnerUsers.slice(0, 50).map((item) => (
                     <div className="rewardCard" key={item.id}>
@@ -3596,18 +3808,55 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                         <h3>{item.display_name || item.email || "User"}</h3>
                         <p>{item.email || item.profile_email || item.id}</p>
                         <p className="rewardStatus">
-                          {(item.roles || []).join(", ") || "No role"} ·{" "}
-                          {Number(item.points_balance || 0).toLocaleString()} points ·{" "}
+                          {(item.roles || []).join(", ") || "No role"} Â·{" "}
+                          {Number(item.points_balance || 0).toLocaleString()} points Â·{" "}
                           {item.created_at
                             ? new Date(item.created_at).toLocaleDateString()
                             : "Unknown date"}
                         </p>
+                        <p className="rewardStatus">
+                          {item.is_active === false ? "Deactivated" : "Active"}
+                          {item.deactivated_at
+                            ? ` Â· ${new Date(item.deactivated_at).toLocaleString()}`
+                            : ""}
+                        </p>
+                      </div>
+                      <div className="eventActions">
+                        {["fan", "producer", "admin"].map((role) => {
+                          const hasRole = (item.roles || []).includes(role);
+
+                          return (
+                            <button
+                              className={hasRole ? "secondaryBtn" : "primaryBtn"}
+                              disabled={item.id === user.id && role === "admin" && hasRole}
+                              key={role}
+                              type="button"
+                              onClick={() =>
+                                updateAdminUserRole(item.id, role, !hasRole)
+                              }
+                            >
+                              {hasRole ? `Remove ${role}` : `Add ${role}`}
+                            </button>
+                          );
+                        })}
+                        <button
+                          className={item.is_active === false ? "primaryBtn" : "dangerBtn"}
+                          disabled={item.id === user.id}
+                          type="button"
+                          onClick={() =>
+                            updateAdminUserActive(item.id, item.is_active === false)
+                          }
+                        >
+                          {item.is_active === false ? "Reactivate" : "Deactivate"}
+                        </button>
                       </div>
                     </div>
                   ))}
                 </div>
               </section>
+              )}
 
+              {ownerAdminTab === "users" && (
               <section className="managerSection">
                 <div className="sectionHeader smallHeader">
                   <h2>Producers</h2>
@@ -3620,7 +3869,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                         <h3>{item.display_name || item.email || "Producer"}</h3>
                         <p>{item.email || item.id}</p>
                         <p className="rewardStatus">
-                          {item.event_count || 0} events · Producer approval/suspension
+                          {item.event_count || 0} events Â· Producer approval/suspension
                           is not in the current schema yet.
                         </p>
                       </div>
@@ -3628,31 +3877,61 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                   ))}
                 </div>
               </section>
+              )}
 
+              {ownerAdminTab === "events" && (
               <section className="managerSection">
                 <div className="sectionHeader smallHeader">
                   <h2>Events</h2>
                   <p>All events across producers.</p>
                 </div>
+                <label className="formField">
+                  Status
+                  <select
+                    value={ownerEventStatusFilter}
+                    onChange={(event) => setOwnerEventStatusFilter(event.target.value)}
+                  >
+                    <option value="all">All events</option>
+                    <option value="active">Active</option>
+                    <option value="cancelled">Cancelled</option>
+                    <option value="archived">Archived</option>
+                  </select>
+                </label>
                 <div className="rewardsList">
                   {visibleOwnerEvents.slice(0, 75).map((item) => (
                     <div className="rewardCard" key={item.id}>
                       <div>
                         <h3>{item.title}</h3>
                         <p>
-                          {item.venue} · {item.city} · {item.event_date} {item.event_time}
+                          {item.venue} Â· {item.city} Â· {item.event_date} {item.event_time}
                         </p>
                         <p className="rewardStatus">
                           {item.owner_email || item.owner_id} ·{" "}
-                          {item.is_ticketed ? "Ticketed" : "Not ticketed"} · Event
-                          hide/deactivate is not in the current schema yet.
+                          {item.is_ticketed ? "Ticketed" : "Not ticketed"} ·{" "}
+                          {item.status || "active"} · {item.ticket_count || 0} tickets/orders
                         </p>
+                      </div>
+                      <div className="eventActions">
+                        <button className="secondaryBtn" type="button" onClick={() => updateAdminEventStatus(item.id, "active")}>
+                          Activate
+                        </button>
+                        <button className="secondaryBtn" type="button" onClick={() => updateAdminEventStatus(item.id, "cancelled")}>
+                          Cancel
+                        </button>
+                        <button className="secondaryBtn" type="button" onClick={() => updateAdminEventStatus(item.id, "archived")}>
+                          Archive
+                        </button>
+                        <button className="dangerBtn" type="button" disabled={Number(item.ticket_count || 0) > 0} onClick={() => deleteAdminEventIfSafe(item.id)}>
+                          Delete
+                        </button>
                       </div>
                     </div>
                   ))}
                 </div>
               </section>
+              )}
 
+              {ownerAdminTab === "events" && (
               <section className="managerSection">
                 <div className="sectionHeader smallHeader">
                   <h2>Tickets / Orders</h2>
@@ -3664,12 +3943,12 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                       <div>
                         <h3>{item.event_title || "Event"}</h3>
                         <p>
-                          {item.ticket_type || "Ticket"} · Qty {item.quantity} ·{" "}
+                          {item.ticket_type || "Ticket"} Â· Qty {item.quantity} Â·{" "}
                           {formatTicketStatus(item.status)}
                         </p>
                         <p className="rewardStatus">
-                          {item.buyer_email || item.user_id} ·{" "}
-                          {item.confirmation_code || "No code"} ·{" "}
+                          {item.buyer_email || item.user_id} Â·{" "}
+                          {item.confirmation_code || "No code"} Â·{" "}
                           {item.checked_in ? "Checked in" : "Not checked in"}
                         </p>
                       </div>
@@ -3677,7 +3956,9 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                   ))}
                 </div>
               </section>
+              )}
 
+              {ownerAdminTab === "redemptions" && (
               <section className="managerSection">
                 <div className="sectionHeader smallHeader">
                   <h2>Rewards / Redemptions</h2>
@@ -3689,8 +3970,8 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                       <div>
                         <h3>{item.reward_label}</h3>
                         <p>
-                          {item.fan_display_name || item.user_email || item.user_id} ·{" "}
-                          {item.points_cost} points · {item.status}
+                          {item.fan_display_name || item.user_email || item.user_id} Â·{" "}
+                          {item.points_cost} points Â· {item.status}
                         </p>
                         <p className="rewardStatus">
                           {item.created_at
@@ -3714,12 +3995,25 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                   ))}
                 </div>
               </section>
+              )}
 
+              {ownerAdminTab === "points" && (
               <section className="managerSection">
                 <div className="sectionHeader smallHeader">
                   <h2>Points History</h2>
                   <p>Earned and redeemed ledger entries.</p>
                 </div>
+                <label className="formField">
+                  Type
+                  <select
+                    value={ownerPointTypeFilter}
+                    onChange={(event) => setOwnerPointTypeFilter(event.target.value)}
+                  >
+                    <option value="all">All entries</option>
+                    <option value="earned">Earned</option>
+                    <option value="redeemed">Redeemed</option>
+                  </select>
+                </label>
                 <label className="formField">
                   Source
                   <select
@@ -3748,21 +4042,26 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                           {Number(item.points || 0).toLocaleString()} points
                         </h3>
                         <p>
-                          {item.user_email || item.user_id} ·{" "}
+                          {item.user_email || item.user_id} Â·{" "}
                           {item.source || item.transaction_type || "points"}
                         </p>
                         <p className="rewardStatus">
-                          {item.description || item.reward_label || "Ledger entry"} ·{" "}
+                          {item.description || item.reward_label || "Ledger entry"} Â·{" "}
                           {item.created_at
                             ? new Date(item.created_at).toLocaleString()
                             : "Unknown date"}
+                        </p>
+                        <p className="rewardStatus">
+                          Reference: {item.reference_id || item.ticket_reservation_id || "none"}
                         </p>
                       </div>
                     </div>
                   ))}
                 </div>
               </section>
+              )}
 
+              {ownerAdminTab === "overview" && (
               <section className="managerSection">
                 <div className="sectionHeader smallHeader">
                   <h2>Suspicious Activity</h2>
@@ -3786,7 +4085,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                           <h3>{item.activity_type}</h3>
                           <p>{item.email || item.user_id}</p>
                           <p className="rewardStatus">
-                            {item.transaction_count} transactions · {item.point_total} points
+                            {item.transaction_count} transactions Â· {item.point_total} points
                           </p>
                         </div>
                       </div>
@@ -3794,6 +4093,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                   )}
                 </div>
               </section>
+              )}
             </section>
           )}
         </main>
@@ -3916,7 +4216,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
             <h3>{event.title}</h3>
             <p className="venue">{event.venue}</p>
             <p className="details">
-              {event.city} · {event.date} · {event.time}
+              {event.city} Â· {event.date} Â· {event.time}
             </p>
 
             <div className="eventActions">
@@ -3937,7 +4237,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
 
     <section className="sponsorBanner">
       <p className="eyebrow">Sponsor Spot</p>
-      <h2>Your brand could own this city’s live event feed.</h2>
+      <h2>Your brand could own this cityâ€™s live event feed.</h2>
       <p>
         Future sponsor banners, boosted event placements, and local brand
         partnerships will appear here.
@@ -4049,7 +4349,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                       </p>
                     )}
                     <p className="details">
-                      {event.city} · {event.date} · {event.time}
+                      {event.city} Â· {event.date} Â· {event.time}
                     </p>
 
                     <div className="eventActions">
@@ -4076,7 +4376,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
         {activeTab === "event" && selectedEvent && (
           <section className="eventDetail">
             <button className="backBtn" onClick={() => goToTab("fan")}>
-              ← Back to events
+              â† Back to events
             </button>
 
             <EventFlyer event={selectedEvent} detail />
@@ -4182,7 +4482,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                                 {isFree
                                   ? "Free RSVP"
                                   : `$${Number(ticketType.price).toFixed(2)}`}
-                                {" · "}
+                                {" Â· "}
                                 {hasKnownInventory
                                   ? `${remainingTickets} remaining`
                                   : "Remaining quantity unavailable"}
@@ -4214,9 +4514,9 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                                 <p className="rewardStatus">
                                   Ticket: ${paidSubtotal.toFixed(2)}
                                   {paidDiscount > 0
-                                    ? ` · Street Team reward: -$${paidDiscount.toFixed(2)}`
+                                    ? ` Â· Street Team reward: -$${paidDiscount.toFixed(2)}`
                                     : ""}
-                                  {" · "}
+                                  {" Â· "}
                                   Total: ${paidTotal.toFixed(2)}
                                 </p>
                               )}
@@ -4431,7 +4731,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                       <h3>{event.title}</h3>
                       <p className="venue">{event.venue}</p>
                       <p className="details">
-                        {event.city} · {event.date} · {event.time}
+                        {event.city} Â· {event.date} Â· {event.time}
                       </p>
                       <div className="shareStats">
                         <span>
@@ -4450,7 +4750,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                             <div className="promoterRow" key={promoter.name}>
                               <span>{promoter.name}</span>
                               <em>
-                                {promoter.shares} shares · {promoter.visits} visits · {" "}
+                                {promoter.shares} shares Â· {promoter.visits} visits Â· {" "}
                                 {promoter.points} pts
                               </em>
                             </div>
@@ -4702,8 +5002,8 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                           <h3>{verifyResult.message}</h3>
                           {verifyResult.reservation && (
                             <p>
-                              {verifyResult.reservation.attendeeName} ·{" "}
-                              {verifyResult.reservation.eventTitle} ·{" "}
+                              {verifyResult.reservation.attendeeName} Â·{" "}
+                              {verifyResult.reservation.eventTitle} Â·{" "}
                               {verifyResult.reservation.confirmation_code}
                             </p>
                           )}
@@ -4753,11 +5053,11 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                         <h3>{reservation.attendeeName}</h3>
                         <p>{reservation.eventTitle}</p>
                         <p>
-                          {reservation.ticketTypeName} · Qty {reservation.quantity} ·{" "}
+                          {reservation.ticketTypeName} Â· Qty {reservation.quantity} Â·{" "}
                           {formatTicketStatus(reservation.status)}
                         </p>
                         <p className="rewardStatus">
-                          {reservation.fan_email || reservation.user_id} ·{" "}
+                          {reservation.fan_email || reservation.user_id} Â·{" "}
                           {new Date(reservation.created_at).toLocaleString()}
                         </p>
                         <p className="rewardStatus">
@@ -5253,20 +5553,20 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                     </p>
                   )}
                   <p>
-                    {reservation.ticketTypeName} · Qty {reservation.quantity} ·{" "}
+                    {reservation.ticketTypeName} Â· Qty {reservation.quantity} Â·{" "}
                     {formatTicketStatus(reservation.status)}
                   </p>
                   <p className="rewardStatus">
                     {reservation.eventDate} {reservation.eventTime}
                     {reservation.confirmation_code
-                      ? ` · ${reservation.confirmation_code}`
+                      ? ` Â· ${reservation.confirmation_code}`
                       : ""}
                   </p>
                   {(reservation.eventVenue || reservation.eventCity) && (
                     <p className="rewardStatus">
                       {[reservation.eventVenue, reservation.eventCity]
                         .filter(Boolean)
-                        .join(" · ")}
+                        .join(" Â· ")}
                     </p>
                   )}
                   <p className="rewardStatus">
@@ -5333,15 +5633,15 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                 <div>
                   <h3>{reservation.eventTitle}</h3>
                   <p>
-                    {reservation.ticketTypeName} · Qty {reservation.quantity} ·{" "}
+                    {reservation.ticketTypeName} Â· Qty {reservation.quantity} Â·{" "}
                     {formatTicketStatus(reservation.status)}
                   </p>
                   <p className="rewardStatus">
                     {reservation.eventDate} {reservation.eventTime}
                     {reservation.eventVenue || reservation.eventCity
-                      ? ` · ${[reservation.eventVenue, reservation.eventCity]
+                      ? ` Â· ${[reservation.eventVenue, reservation.eventCity]
                           .filter(Boolean)
-                          .join(" · ")}`
+                          .join(" Â· ")}`
                       : ""}
                   </p>
                   {reservation.confirmation_code && (
@@ -5369,7 +5669,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                 <div>
                   <h3>{redemption.reward_label}</h3>
                   <p>
-                    {redemption.points_cost?.toLocaleString()} points ·{" "}
+                    {redemption.points_cost?.toLocaleString()} points Â·{" "}
                     {redemption.status || "pending"}
                   </p>
                 </div>
@@ -5467,7 +5767,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
               <div>
                 <h3>{redemption.reward_label}</h3>
                 <p>
-                  {redemption.points_cost?.toLocaleString()} points ·{" "}
+                  {redemption.points_cost?.toLocaleString()} points Â·{" "}
                   {redemption.status || "pending"}
                 </p>
               </div>
@@ -5601,3 +5901,4 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
 }
 
 export default App;
+
