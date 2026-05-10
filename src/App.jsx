@@ -649,6 +649,7 @@ function App() {
   const [selectedAccountType, setSelectedAccountType] = useState("fan");
   const [userRoles, setUserRoles] = useState([]);
   const [areUserRolesLoaded, setAreUserRolesLoaded] = useState(false);
+  const [isSavingProducerAccess, setIsSavingProducerAccess] = useState(false);
   const [fanProfileForm, setFanProfileForm] = useState(() =>
     loadSavedValue("streetTeamFanProfile", emptyFanProfileForm)
   );
@@ -885,6 +886,35 @@ function App() {
 
     loadOwnerDashboard();
   }, [isOwnerExperience, user, hasOwnerAdminRole]);
+
+  useEffect(() => {
+    if (
+      activeTab !== "producer" ||
+      !user ||
+      !areUserRolesLoaded ||
+      hasProducerRole ||
+      isSavingProducerAccess
+    ) {
+      return;
+    }
+
+    saveUserRoleForUser(user.id, "producer").then((roleResult) => {
+      if (roleResult?.error) {
+        setAuthMessage(
+          formatSupabaseError(
+            roleResult.error,
+            "Producer access could not be saved."
+          )
+        );
+      }
+    });
+  }, [
+    activeTab,
+    user,
+    areUserRolesLoaded,
+    hasProducerRole,
+    isSavingProducerAccess,
+  ]);
 
   useEffect(() => {
     if (!isLoadingEvents && events.length > 0) {
@@ -2417,26 +2447,34 @@ function goToMyTickets() {
   }
 
   async function saveUserRoleForUser(userId, role) {
-  if (!userId || !role) return;
+  if (!userId || !role) return { error: null };
 
-  const { error } = await supabase.from("user_roles").upsert(
-    {
-      user_id: userId,
-      role,
-    },
-    {
-      onConflict: "user_id,role",
-    }
-  );
+  if (role === "producer") {
+    setIsSavingProducerAccess(true);
+  }
+
+  const { data, error } = await supabase.rpc("set_own_app_role", {
+    p_role: role,
+  });
+
+  if (role === "producer") {
+    setIsSavingProducerAccess(false);
+  }
 
   if (error) {
     console.error("Could not save user role:", error);
-    return;
+    return { error };
   }
 
-  setUserRoles((currentRoles) =>
-    currentRoles.includes(role) ? currentRoles : [...currentRoles, role]
-  );
+  const nextRoles = Array.isArray(data) ? data : [];
+
+  setUserRoles((currentRoles) => {
+    const mergedRoles = new Set([...currentRoles, ...nextRoles, role]);
+    return Array.from(mergedRoles);
+  });
+
+  setAreUserRolesLoaded(true);
+  return { error: null, roles: nextRoles };
 }
 
 async function loadUserRoles(currentUser) {
@@ -2490,7 +2528,22 @@ async function loadUserRoles(currentUser) {
 
       if (data.session?.user) {
         const createdUser = data.session.user;
-        await saveUserRoleForUser(createdUser.id, accountTypeForSubmit);
+        const roleResult = await saveUserRoleForUser(
+          createdUser.id,
+          accountTypeForSubmit
+        );
+
+        if (roleResult?.error) {
+          setUser(createdUser);
+          setAuthMessage(
+            formatSupabaseError(
+              roleResult.error,
+              `Account created, but ${accountTypeForSubmit} access could not be saved.`
+            )
+          );
+          return;
+        }
+
         setUser(createdUser);
 
         setAuthMessage(
@@ -2527,12 +2580,30 @@ async function loadUserRoles(currentUser) {
       const loggedInUser = data.user;
       setUser(loggedInUser);
 
-      const role = (await getUserRole(loggedInUser)) || selectedAccountType;
+      let role = (await getUserRole(loggedInUser)) || selectedAccountType;
       setSelectedAccountType(role);
 
       if (role === "owner" || role === "admin") {
         openOwnerAdminRoute();
         return;
+      }
+
+      if (accountTypeForSubmit === "producer" && role !== "producer") {
+        const roleResult = await saveUserRoleForUser(loggedInUser.id, "producer");
+
+        if (roleResult?.error) {
+          setAuthMessage(
+            formatSupabaseError(
+              roleResult.error,
+              "Logged in, but producer access could not be saved."
+            )
+          );
+          setActiveTab("producer");
+          return;
+        }
+
+        role = "producer";
+        setSelectedAccountType("producer");
       }
 
       setActiveTab(
@@ -4837,20 +4908,14 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
 
     {user && !hasProducerRole && (
       <p className="authMessage">
-        You are currently logged in, but this account is not marked as a
-        producer account.
+        {isSavingProducerAccess
+          ? "Setting up producer access..."
+          : authMessage || "Setting up producer access for this account."}
       </p>
     )}
 
     {user && !hasProducerRole ? (
       <div className="eventActions">
-        <button
-          className="primaryBtn"
-          type="button"
-          onClick={() => saveUserRoleForUser(user.id, "producer")}
-        >
-          Add Producer Access
-        </button>
         <button
           className="secondaryBtn"
           type="button"

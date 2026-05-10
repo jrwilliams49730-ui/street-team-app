@@ -393,6 +393,39 @@ begin
 end;
 $$;
 
+create or replace function public.set_own_app_role(
+  p_role text
+)
+returns text[]
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_roles text[];
+begin
+  if v_user_id is null then
+    raise exception 'Log in before updating account access.';
+  end if;
+
+  if p_role not in ('fan', 'producer') then
+    raise exception 'Invalid account access role.';
+  end if;
+
+  insert into public.user_roles (user_id, role)
+  values (v_user_id, p_role)
+  on conflict (user_id, role) do nothing;
+
+  select coalesce(array_agg(role order by role), array[]::text[])
+  into v_roles
+  from public.user_roles
+  where user_id = v_user_id;
+
+  return v_roles;
+end;
+$$;
+
 create or replace function public.reset_mvp_test_data(
   p_admin_email text default 'staticentertainmentsc@gmail.com'
 )
@@ -578,4 +611,5 @@ grant execute on function public.award_account_creation_points() to authenticate
 grant execute on function public.award_paid_ticket_points(uuid, text) to service_role;
 grant execute on function public.admin_update_redemption_status(text, text, text) to authenticated;
 grant execute on function public.delete_own_event(bigint) to authenticated;
+grant execute on function public.set_own_app_role(text) to authenticated;
 grant execute on function public.reset_mvp_test_data(text) to authenticated;
