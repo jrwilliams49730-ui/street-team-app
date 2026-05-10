@@ -298,7 +298,6 @@ declare
   v_check_ins_deleted integer := 0;
   v_reservations_deleted integer := 0;
   v_tickets_deleted integer := 0;
-  v_uploaded_files_deleted integer := 0;
   v_events_deleted integer := 0;
 begin
   if v_user_id is null then
@@ -370,15 +369,6 @@ begin
     get diagnostics v_tickets_deleted = row_count;
   end if;
 
-  if to_regclass('storage.objects') is not null
-    and nullif(trim(v_event.flyer_path), '') is not null
-  then
-    delete from storage.objects
-    where bucket_id = 'event-fliers'
-      and name = v_event.flyer_path;
-    get diagnostics v_uploaded_files_deleted = row_count;
-  end if;
-
   delete from public.events
   where id = p_event_id
     and owner_id = v_user_id;
@@ -397,7 +387,8 @@ begin
     'points_history_deleted', v_points_history_deleted,
     'reward_redemptions_deleted', v_reward_redemptions_deleted,
     'check_ins_scans_deleted', v_check_ins_deleted,
-    'uploaded_files_deleted', v_uploaded_files_deleted
+    'uploaded_files_deleted', 0,
+    'uploaded_files_note', 'Supabase SQL cannot delete storage.objects directly. Use the Storage API for flyer cleanup.'
   );
 end;
 $$;
@@ -412,7 +403,6 @@ set search_path = public
 as $$
 declare
   v_admin_ids uuid[];
-  v_uploaded_files_deleted integer := 0;
   v_reward_redemptions_deleted integer := 0;
   v_points_history_deleted integer := 0;
   v_referrals_deleted integer := 0;
@@ -439,12 +429,6 @@ begin
 
   if coalesce(array_length(v_admin_ids, 1), 0) = 0 then
     raise exception 'No admin account found to preserve.';
-  end if;
-
-  if to_regclass('storage.objects') is not null then
-    delete from storage.objects
-    where bucket_id = 'event-fliers';
-    get diagnostics v_uploaded_files_deleted = row_count;
   end if;
 
   if to_regclass('public.reward_redemptions') is not null then
@@ -567,7 +551,8 @@ begin
     'points_history_deleted', v_points_history_deleted,
     'reward_redemptions_deleted', v_reward_redemptions_deleted,
     'check_ins_scans_deleted', v_check_ins_deleted,
-    'uploaded_files_deleted', v_uploaded_files_deleted,
+    'uploaded_files_deleted', 0,
+    'uploaded_files_note', 'Supabase SQL cannot delete storage.objects directly. Use the Storage API for flyer cleanup.',
     'non_admin_users_remaining', (
       select count(*)
       from auth.users users

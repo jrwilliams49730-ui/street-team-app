@@ -6,7 +6,6 @@ do $$
 declare
   v_admin_email text := 'staticentertainmentsc@gmail.com';
   v_admin_ids uuid[];
-  v_uploaded_files_deleted integer := 0;
   v_reward_redemptions_deleted integer := 0;
   v_points_history_deleted integer := 0;
   v_referrals_deleted integer := 0;
@@ -29,12 +28,6 @@ begin
 
   if coalesce(array_length(v_admin_ids, 1), 0) = 0 then
     raise exception 'No admin account found to preserve.';
-  end if;
-
-  if to_regclass('storage.objects') is not null then
-    delete from storage.objects
-    where bucket_id = 'event-fliers';
-    get diagnostics v_uploaded_files_deleted = row_count;
   end if;
 
   if to_regclass('public.reward_redemptions') is not null then
@@ -141,7 +134,7 @@ begin
   where users.id = any(v_admin_ids)
   on conflict (id) do nothing;
 
-  raise notice 'Admin reset complete. non_admin_users_deleted=%, profiles_deleted=%, events_deleted=%, tickets_deleted=%, reservations_deleted=%, pending_reservations_deleted=%, share_links_deleted=%, referrals_deleted=%, points_history_deleted=%, reward_redemptions_deleted=%, check_ins_scans_deleted=%, stripe_records_deleted=%, uploaded_files_deleted=%',
+  raise notice 'Admin reset complete. non_admin_users_deleted=%, profiles_deleted=%, events_deleted=%, tickets_deleted=%, reservations_deleted=%, pending_reservations_deleted=%, share_links_deleted=%, referrals_deleted=%, points_history_deleted=%, reward_redemptions_deleted=%, check_ins_scans_deleted=%, stripe_records_deleted=%. Uploaded files were not deleted because Supabase SQL cannot delete storage.objects directly.',
     v_auth_users_deleted,
     v_profiles_deleted,
     v_events_deleted,
@@ -153,8 +146,7 @@ begin
     v_points_history_deleted,
     v_reward_redemptions_deleted,
     v_check_ins_deleted,
-    v_stripe_records_deleted,
-    v_uploaded_files_deleted;
+    v_stripe_records_deleted;
 end $$;
 
 select
