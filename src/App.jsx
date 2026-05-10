@@ -59,6 +59,7 @@ const fanEventTypeOptions = [
   "Nightlife",
 ];
 
+const ownerAdminRoutePath = "/street-team-hq";
 const geocodeErrorMessage =
   "We could not verify this address. Please check the venue address and zip code.";
 
@@ -751,7 +752,7 @@ function App() {
   const scannerVideoRef = useRef(null);
   const scannerTimerRef = useRef(null);
   const scannerStreamRef = useRef(null);
-  const isOwnerRoute = window.location.pathname === "/street-team-hq";
+  const isOwnerRoute = window.location.pathname === ownerAdminRoutePath;
   const isOwnerExperience = isOwnerRoute;
   const isWaitingForUserRoles = Boolean(user && !areUserRolesLoaded);
 
@@ -2299,7 +2300,17 @@ function goToMyTickets() {
       roleValue: roles.join(",") || null,
       is_admin: roles.includes("admin") || roles.includes("owner"),
       adminRouteAllowed: Boolean(isOwnerAdminAllowed),
+      redirectDestination:
+        roles.includes("admin") || roles.includes("owner")
+          ? ownerAdminRoutePath
+          : null,
     });
+  }
+
+  function openOwnerAdminRoute() {
+    if (window.location.pathname === ownerAdminRoutePath) return;
+
+    window.location.assign(ownerAdminRoutePath);
   }
 
   async function resolveUserRoles(currentUser) {
@@ -2476,6 +2487,12 @@ async function loadUserRoles(currentUser) {
 
       const role = (await getUserRole(loggedInUser)) || selectedAccountType;
       setSelectedAccountType(role);
+
+      if (role === "owner" || role === "admin") {
+        openOwnerAdminRoute();
+        return;
+      }
+
       setActiveTab(
         role === "fan"
           ? "streetteam"
