@@ -59,7 +59,8 @@ const fanEventTypeOptions = [
   "Nightlife",
 ];
 
-const ownerAdminRoutePath = "/street-team-hq";
+const appBasePath = import.meta.env.BASE_URL;
+const ownerAdminRoutePath = `${appBasePath.replace(/\/$/, "")}/street-team-hq`;
 const geocodeErrorMessage =
   "We could not verify this address. Please check the venue address and zip code.";
 
