@@ -43,6 +43,13 @@ begin
   insert into public.user_roles (user_id, role)
   select unnest(v_admin_ids), 'admin'
   on conflict (user_id, role) do nothing;
+
+  insert into public.admin_user_status (user_id, is_active)
+  select unnest(v_admin_ids), true
+  on conflict (user_id) do update
+  set is_active = true,
+      deactivated_at = null,
+      updated_at = now();
 end $$;
 
 select

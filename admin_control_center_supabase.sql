@@ -34,6 +34,15 @@ from auth.users
 where lower(email) = 'staticentertainmentsc@gmail.com'
 on conflict (user_id, role) do nothing;
 
+insert into public.admin_user_status (user_id, is_active)
+select id, true
+from auth.users
+where lower(email) = 'staticentertainmentsc@gmail.com'
+on conflict (user_id) do update
+set is_active = true,
+    deactivated_at = null,
+    updated_at = now();
+
 create or replace function public.is_owner_admin()
 returns boolean
 language sql
@@ -45,6 +54,12 @@ as $$
     from public.user_roles
     where user_id = auth.uid()
       and role in ('owner', 'admin')
+  )
+  or exists (
+    select 1
+    from auth.users
+    where id = auth.uid()
+      and lower(email) = 'staticentertainmentsc@gmail.com'
   );
 $$;
 

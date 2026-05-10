@@ -95,6 +95,8 @@ const rewardTiers = [
   },
 ];
 
+const configuredOwnerAdminEmails = ["staticentertainmentsc@gmail.com"];
+
 const emptyTicketTypeForm = {
   name: "General Admission",
   description: "",
@@ -309,6 +311,10 @@ function getRewardConfig(reward) {
     selectedRewardType: reward.rewardType || label.replace(/^\$\d+\s+/, "").replace(/\s+gift card$/i, ""),
     dollarAmount: reward.dollarAmount || Number(label.match(/\$(\d+)/)?.[1] || 0),
   };
+}
+
+function isConfiguredOwnerAdminEmail(email) {
+  return configuredOwnerAdminEmails.includes(String(email || "").toLowerCase());
 }
 
 function dedupeTicketReservations(reservations) {
@@ -2284,23 +2290,54 @@ function goToMyTickets() {
     loadShareStatsFromSupabase();
   }
 
-  async function getUserRole(userId) {
-    if (!userId) return null;
+  function logAdminAccessStatus(currentUser, roles, isOwnerAdminAllowed) {
+    if (!import.meta.env.DEV || !currentUser) return;
+
+    console.debug("Admin access check", {
+      email: currentUser.email || null,
+      profileFound: Boolean(fanProfile),
+      roleValue: roles.join(",") || null,
+      is_admin: roles.includes("admin") || roles.includes("owner"),
+      adminRouteAllowed: Boolean(isOwnerAdminAllowed),
+    });
+  }
+
+  async function resolveUserRoles(currentUser) {
+    if (!currentUser) return [];
+
+    let roles = [];
 
     const { data, error } = await supabase
       .from("user_roles")
       .select("role")
-      .eq("user_id", userId);
+      .eq("user_id", currentUser.id);
 
     if (error) {
-      console.error("Could not fetch user role:", error);
-      return null;
+      console.error("Could not load user roles:", error);
+    } else {
+      roles = (data || []).map((row) => row.role);
     }
 
-    const roles = data.map((row) => row.role);
-    setUserRoles(roles);
-    setAreUserRolesLoaded(true);
+    const { data: isOwnerAdminAllowed, error: adminError } =
+      await supabase.rpc("is_owner_admin");
 
+    if (adminError) {
+      console.error("Could not verify admin access:", adminError);
+    }
+
+    if (
+      isOwnerAdminAllowed ||
+      isConfiguredOwnerAdminEmail(currentUser.email)
+    ) {
+      roles = Array.from(new Set([...roles, "owner", "admin"]));
+    }
+
+    logAdminAccessStatus(currentUser, roles, isOwnerAdminAllowed);
+
+    return roles;
+  }
+
+  function getPrimaryRole(roles) {
     if (roles.includes("owner")) {
       return "owner";
     }
@@ -2314,6 +2351,16 @@ function goToMyTickets() {
     }
 
     return roles[0] ?? null;
+  }
+
+  async function getUserRole(currentUser) {
+    if (!currentUser) return null;
+
+    const roles = await resolveUserRoles(currentUser);
+    setUserRoles(roles);
+    setAreUserRolesLoaded(true);
+
+    return getPrimaryRole(roles);
   }
 
   async function saveUserRoleForUser(userId, role) {
@@ -2346,19 +2393,8 @@ async function loadUserRoles(currentUser) {
     return;
   }
 
-  const { data, error } = await supabase
-    .from("user_roles")
-    .select("role")
-    .eq("user_id", currentUser.id);
-
-  if (error) {
-    console.error("Could not load user roles:", error);
-    setUserRoles([]);
-    setAreUserRolesLoaded(true);
-    return;
-  }
-
-  setUserRoles(data.map((row) => row.role));
+  const roles = await resolveUserRoles(currentUser);
+  setUserRoles(roles);
   setAreUserRolesLoaded(true);
 }
 
@@ -2438,14 +2474,14 @@ async function loadUserRoles(currentUser) {
       const loggedInUser = data.user;
       setUser(loggedInUser);
 
-      const role = (await getUserRole(loggedInUser.id)) || selectedAccountType;
+      const role = (await getUserRole(loggedInUser)) || selectedAccountType;
       setSelectedAccountType(role);
       setActiveTab(
-        role === "owner" || role === "admin"
-          ? "owner"
-          : role === "fan"
+        role === "fan"
           ? "streetteam"
-          : "producer"
+          : role === "producer"
+          ? "producer"
+          : "fan"
       );
 
       if (role === "fan") {
