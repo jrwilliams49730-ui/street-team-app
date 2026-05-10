@@ -70,7 +70,7 @@ begin
   )
   values (
     v_user_id,
-    10,
+    5,
     'earned',
     'earned',
     'account_creation',
@@ -93,111 +93,8 @@ language plpgsql
 security definer
 set search_path = public
 as $$
-declare
-  v_referred_user_id uuid := auth.uid();
-  v_referred_created_at timestamptz;
-  v_referrer_user_id uuid;
-  v_event_id bigint;
-  v_inserted_count integer := 0;
 begin
-  if v_referred_user_id is null then
-    raise exception 'Log in before referral points can be awarded.';
-  end if;
-
-  if nullif(trim(p_share_code), '') is null then
-    return false;
-  end if;
-
-  select created_at
-  into v_referred_created_at
-  from auth.users
-  where id = v_referred_user_id;
-
-  if v_referred_created_at is null
-    or v_referred_created_at < now() - interval '14 days'
-  then
-    return false;
-  end if;
-
-  select fan_user_id, event_id
-  into v_referrer_user_id, v_event_id
-  from public.event_share_actions
-  where share_code = p_share_code
-    and action = 'share'
-    and fan_user_id is not null
-  order by created_at asc
-  limit 1;
-
-  if v_referrer_user_id is null
-    or v_referrer_user_id = v_referred_user_id
-  then
-    return false;
-  end if;
-
-  insert into public.point_transactions (
-    user_id,
-    points,
-    type,
-    transaction_type,
-    source,
-    description,
-    event_id,
-    reference_id,
-    referred_user_id,
-    metadata
-  )
-  values (
-    v_referrer_user_id,
-    5,
-    'earned',
-    'earned',
-    'referral_signup',
-    'Referral joined',
-    v_event_id,
-    p_share_code,
-    v_referred_user_id,
-    jsonb_build_object(
-      'shareCode', p_share_code,
-      'referredUserId', v_referred_user_id
-    )
-  )
-  on conflict do nothing;
-
-  get diagnostics v_inserted_count = row_count;
-
-  if v_inserted_count = 1
-    and exists (
-      select 1
-      from information_schema.columns
-      where table_schema = 'public'
-        and table_name = 'fan_profiles'
-        and column_name = 'points'
-    )
-  then
-    if exists (
-      select 1
-      from information_schema.columns
-      where table_schema = 'public'
-        and table_name = 'fan_profiles'
-        and column_name = 'updated_at'
-    )
-    then
-      execute
-        'update public.fan_profiles
-         set points = coalesce(points, 0) + 5,
-             updated_at = now()
-         where id = $1'
-      using v_referrer_user_id;
-    else
-      execute
-        'update public.fan_profiles
-         set points = coalesce(points, 0) + 5
-         where id = $1'
-      using v_referrer_user_id;
-    end if;
-  end if;
-
-  return v_inserted_count = 1;
+  return false;
 end;
 $$;
 

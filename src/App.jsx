@@ -64,32 +64,34 @@ const geocodeErrorMessage =
 
 const rewardTiers = [
   {
-    label: "$5 off ticket",
-    points: 200,
-  },
-  {
-    label: "$10 off ticket",
-    points: 350,
-  },
-  {
-    label: "Free GA ticket",
+    label: "$5 Amazon gift card",
     points: 500,
+    dollarAmount: 5,
+    rewardType: "Amazon",
   },
   {
-    label: "Free VIP/premium ticket",
+    label: "$10 Walmart gift card",
     points: 1000,
+    dollarAmount: 10,
+    rewardType: "Walmart",
   },
   {
-    label: "$5 Tremendous gift card",
-    points: 500,
-  },
-  {
-    label: "$10 Tremendous gift card",
-    points: 1000,
-  },
-  {
-    label: "$25 Tremendous gift card",
+    label: "$25 Starbucks gift card",
     points: 2500,
+    dollarAmount: 25,
+    rewardType: "Starbucks",
+  },
+  {
+    label: "$25 Target gift card",
+    points: 2500,
+    dollarAmount: 25,
+    rewardType: "Target",
+  },
+  {
+    label: "$50 Virtual Visa gift card",
+    points: 5000,
+    dollarAmount: 50,
+    rewardType: "Virtual Visa",
   },
 ];
 
@@ -256,7 +258,6 @@ function buildShareLink(eventId, shareCode) {
 
 const pendingReferralShareCodeKey = "streetTeamReferralShareCode";
 const pendingCheckoutShareCodeKey = "streetTeamCheckoutShareCode";
-const awardedReferralUsersKey = "streetTeamAwardedReferralUsers";
 
 function getShareCodeFromUrl() {
   return new URLSearchParams(window.location.search).get("share");
@@ -276,20 +277,12 @@ function getPointHistoryLabel(transaction) {
     return transaction.description || "Account created";
   }
 
-  if (transaction.source === "referral_signup") {
-    return transaction.description || "Referral joined";
-  }
-
   if (transaction.source === "own_paid_ticket_purchase") {
     return transaction.description || "Bought paid ticket";
   }
 
   if (transaction.source === "share_ticket_purchase") {
     return transaction.description || "Ticket bought from your link";
-  }
-
-  if (transaction.source === "referred_user_ticket_purchase") {
-    return transaction.description || "Referred user bought a ticket";
   }
 
   if (transaction.reward_label) {
@@ -309,20 +302,12 @@ function getPointHistoryLabel(transaction) {
 
 function getRewardConfig(reward) {
   const label = String(reward?.label || reward?.reward_label || "");
-  const amountMatch = label.match(/\$(\d+(?:\.\d{1,2})?)\s+off\s+ticket/i);
-  const isGiftCard = /gift card/i.test(label);
-  const isFreeTicket = /^free\s+/i.test(label) && /ticket/i.test(label);
-  const isTicketReward = amountMatch || isFreeTicket;
-  const isVip = /vip|premium/i.test(label);
-  const isGa = /\bga\b|general admission/i.test(label);
 
   return {
     rewardId: label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""),
-    rewardType: isGiftCard ? "gift_card" : isTicketReward ? amountMatch ? "ticket_discount" : "free_ticket" : "other",
-    discountAmountCents: amountMatch ? Math.round(Number(amountMatch[1]) * 100) : null,
-    percentOff: isFreeTicket ? 100 : null,
-    eligibleTicketType: isVip ? "vip" : isGa ? "ga" : "any",
-    stripeEnabled: Boolean(isTicketReward && !isGiftCard),
+    rewardType: "gift_card",
+    selectedRewardType: reward.rewardType || label.replace(/^\$\d+\s+/, "").replace(/\s+gift card$/i, ""),
+    dollarAmount: reward.dollarAmount || Number(label.match(/\$(\d+)/)?.[1] || 0),
   };
 }
 
@@ -640,7 +625,7 @@ function EventFlyer({ event, detail = false }) {
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState("home");
+  const [activeTab, setActiveTab] = useState("fan");
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [myTeamTab, setMyTeamTab] = useState("overview");
   const [producerTab, setProducerTab] = useState("dashboard");
@@ -697,16 +682,9 @@ function App() {
     points: "",
     reason: "",
   });
+  const [adminRedemptionNotes, setAdminRedemptionNotes] = useState({});
 
   const availableFanPoints = fanStats.points;
-  const approvedTicketDiscountRedemption = redemptions.find(
-    (redemption) =>
-      redemption.status === "approved" &&
-      !redemption.used_at &&
-      redemption.coupon_code &&
-      redemption.stripe_enabled
-  );
-
   const nextReward =
     rewardTiers.find((reward) => availableFanPoints < reward.points) ||
     rewardTiers[rewardTiers.length - 1];
@@ -736,7 +714,6 @@ function App() {
   const [verifyCode, setVerifyCode] = useState("");
   const [verifyResult, setVerifyResult] = useState(null);
   const [scannerEventId, setScannerEventId] = useState("all");
-  const [visibleTicketQrIds, setVisibleTicketQrIds] = useState({});
   const [checkoutReturn, setCheckoutReturn] = useState(getInitialCheckoutReturn);
   const [isScannerActive, setIsScannerActive] = useState(false);
   const [scannerMessage, setScannerMessage] = useState("");
@@ -769,7 +746,7 @@ function App() {
   const scannerTimerRef = useRef(null);
   const scannerStreamRef = useRef(null);
   const isOwnerRoute = window.location.pathname === "/street-team-hq";
-  const isOwnerExperience = isOwnerRoute || (user && hasOwnerAdminRole);
+  const isOwnerExperience = isOwnerRoute;
   const isWaitingForUserRoles = Boolean(user && !areUserRolesLoaded);
 
   function resetFanAccountState() {
@@ -891,7 +868,6 @@ function App() {
   loadFanProfile(user);
   loadFanStatsFromSupabase();
   awardAccountCreationPoints(user);
-  awardReferralSignupPoints(user);
 }, [user]);
 
   useEffect(() => {
@@ -1161,7 +1137,7 @@ async function loadFanStatsFromSupabase() {
     let { data, error } = await supabase
       .from("point_transactions")
       .select(
-        "id, points, transaction_type, event_id, reward_label, source, description, created_at"
+        "id, user_id, points, transaction_type, event_id, ticket_reservation_id, share_link_id, redemption_id, reward_label, source, description, created_at"
       )
       .eq("user_id", user.id);
 
@@ -1243,45 +1219,14 @@ async function awardAccountCreationPoints(currentUser = user) {
   }
 }
 
-async function awardReferralSignupPoints(currentUser = user) {
-  if (!currentUser) return;
-
-  const shareCode = localStorage.getItem(pendingReferralShareCodeKey);
-  if (!shareCode) return;
-
-  const awardedUsers = loadSavedValue(awardedReferralUsersKey, {});
-  if (awardedUsers[currentUser.id] === shareCode) return;
-
-  const { data, error } = await supabase.rpc("award_referral_signup_points", {
-    p_share_code: shareCode,
-  });
-
-  if (error) {
-    console.warn("Referral signup points were not awarded:", error);
-    return;
-  }
-
-  localStorage.setItem(
-    awardedReferralUsersKey,
-    JSON.stringify({
-      ...awardedUsers,
-      [currentUser.id]: shareCode,
-    })
-  );
-
-  localStorage.removeItem(pendingReferralShareCodeKey);
-
-  if (data) {
-    await loadFanStatsFromSupabase();
-  }
-}
-
 async function recordPointTransaction({
   points,
   type,
   eventId = null,
   rewardLabel = "",
   referenceId = null,
+  redemptionId = null,
+  shareLinkId = null,
   metadata = {},
 }) {
   if (!user || !points || !type) return { error: null };
@@ -1293,6 +1238,8 @@ async function recordPointTransaction({
     event_id: eventId,
     reward_label: rewardLabel,
     reference_id: referenceId,
+    redemption_id: redemptionId,
+    share_link_id: shareLinkId,
     metadata,
   });
 
@@ -1402,11 +1349,12 @@ async function submitAdminPointAdjustment(event) {
   await loadOwnerDashboard();
 }
 
-async function updateRedemptionStatus(redemptionId, status) {
+async function updateRedemptionStatus(redemptionId, status, adminNotes = "") {
   if (status === "approved") {
     const { data, error } = await supabase.functions.invoke("approve-redemption", {
       body: {
         redemption_id: String(redemptionId),
+        admin_notes: adminNotes,
       },
     });
 
@@ -1418,7 +1366,11 @@ async function updateRedemptionStatus(redemptionId, status) {
       return;
     }
 
-    setOwnerMessage("Reward request approved.");
+    setOwnerMessage(
+      data?.manual_required
+        ? data.message || "Tremendous not configured."
+        : "Reward request sent."
+    );
     await loadOwnerDashboard();
     return;
   }
@@ -1426,6 +1378,7 @@ async function updateRedemptionStatus(redemptionId, status) {
   const { error } = await supabase.rpc("admin_update_redemption_status", {
     p_redemption_id: String(redemptionId),
     p_status: status,
+    p_admin_notes: adminNotes,
   });
 
   if (error) {
@@ -1572,12 +1525,11 @@ async function requestRewardRedemption(reward) {
       fan_email: fanEmail,
       reward_label: reward.label,
       points_cost: reward.points,
+      points_spent: reward.points,
+      dollar_amount: rewardConfig.dollarAmount,
+      selected_reward_type: rewardConfig.selectedRewardType,
       reward_id: rewardConfig.rewardId,
       reward_type: rewardConfig.rewardType,
-      discount_amount_cents: rewardConfig.discountAmountCents,
-      percent_off: rewardConfig.percentOff,
-      eligible_ticket_type: rewardConfig.eligibleTicketType,
-      stripe_enabled: rewardConfig.stripeEnabled,
       status: "pending",
     })
     .select()
@@ -1621,6 +1573,7 @@ async function requestRewardRedemption(reward) {
     type: "reward_redemption",
     rewardLabel: reward.label,
     referenceId: redemption.id,
+    redemptionId: redemption.id,
     metadata: {
       status: "pending",
     },
@@ -2097,11 +2050,10 @@ function goToTab(tabName) {
   setActiveTab(tabName);
 }
 
-function toggleTicketQr(reservationId) {
-  setVisibleTicketQrIds((currentIds) => ({
-    ...currentIds,
-    [reservationId]: !currentIds[reservationId],
-  }));
+function goToMyTickets() {
+  setSelectedEvent(null);
+  setMyTeamTab("tickets");
+  setActiveTab("streetteam");
 }
 
   function openEvent(event) {
@@ -2261,6 +2213,7 @@ function toggleTicketQr(reservationId) {
         type: "share_reward",
         eventId: event.id,
         referenceId: shareCode,
+        shareLinkId: shareCode,
         metadata: {
           eventTitle: event.title,
           shareCode,
@@ -3492,7 +3445,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
       return;
     }
 
-    setActiveTab("home");
+    setActiveTab("fan");
   }
 
   function renderTicketTypeEditor(mode, currentForm) {
@@ -4132,22 +4085,55 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                             ? new Date(item.created_at).toLocaleString()
                             : "Unknown date"}
                         </p>
-                        {item.coupon_code && (
+                        {item.tremendous_order_id && (
                           <p className="rewardStatus">
-                            Code: <strong>{item.coupon_code}</strong>
+                            Tremendous order: <strong>{item.tremendous_order_id}</strong>
                           </p>
                         )}
+                        {item.tremendous_external_id && (
+                          <p className="rewardStatus">
+                            External ID: <strong>{item.tremendous_external_id}</strong>
+                          </p>
+                        )}
+                        {item.error_message && (
+                          <p className="rewardStatus">
+                            Error: <strong>{item.error_message}</strong>
+                          </p>
+                        )}
+                        {item.admin_notes && (
+                          <p className="rewardStatus">
+                            Notes: <strong>{item.admin_notes}</strong>
+                          </p>
+                        )}
+                        <label className="formField">
+                          Fulfillment Notes
+                          <textarea
+                            value={adminRedemptionNotes[item.id] ?? item.admin_notes ?? ""}
+                            onChange={(event) =>
+                              setAdminRedemptionNotes((currentNotes) => ({
+                                ...currentNotes,
+                                [item.id]: event.target.value,
+                              }))
+                            }
+                            placeholder="Provider, amount, confirmation/reference number"
+                          />
+                        </label>
                       </div>
                       <select
                         value={item.status || "pending"}
                         onChange={(event) =>
-                          updateRedemptionStatus(item.id, event.target.value)
+                          updateRedemptionStatus(
+                            item.id,
+                            event.target.value,
+                            adminRedemptionNotes[item.id] ?? item.admin_notes ?? ""
+                          )
                         }
                       >
                         <option value="pending">pending</option>
-                        <option value="approved">approved</option>
-                        <option value="used">used</option>
-                        <option value="denied">denied</option>
+                        <option value="approved">Approve / Send</option>
+                        <option value="sent">sent</option>
+                        <option value="manually_sent">manually_sent</option>
+                        <option value="canceled">canceled</option>
                         <option value="failed">failed</option>
                       </select>
                     </div>
@@ -4184,10 +4170,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                     <option value="all">All sources</option>
                     <option value="share_reward">share_link</option>
                     <option value="own_paid_ticket_purchase">ticket_purchase</option>
-                    <option value="referral_signup">referral_signup</option>
-                    <option value="referred_user_ticket_purchase">
-                      referral_ticket_purchase
-                    </option>
+                    <option value="share_ticket_purchase">share_ticket_purchase</option>
                     <option value="reward_redemption">reward_redemption</option>
                     <option value="admin_adjustment">admin_adjustment</option>
                   </select>
@@ -4274,12 +4257,6 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
 
         <nav className="tabs">
           <button
-            className={activeTab === "home" ? "tab active" : "tab"}
-            onClick={() => goToTab("home")}
-          >
-            Home
-          </button>
-          <button
             className={
               activeTab === "fan" || activeTab === "event"
                 ? "tab active"
@@ -4287,11 +4264,28 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
             }
             onClick={() => goToTab("fan")}
           >
-            Shows
+            Events
           </button>
           <button
-            className={activeTab === "streetteam" ? "tab active" : "tab"}
-            onClick={() => goToTab("streetteam")}
+            className={
+              activeTab === "streetteam" && myTeamTab === "tickets"
+                ? "tab active"
+                : "tab"
+            }
+            onClick={goToMyTickets}
+          >
+            My Tickets
+          </button>
+          <button
+            className={
+              activeTab === "streetteam" && myTeamTab !== "tickets"
+                ? "tab active"
+                : "tab"
+            }
+            onClick={() => {
+              setMyTeamTab("overview");
+              goToTab("streetteam");
+            }}
           >
             My Team
           </button>
@@ -4355,7 +4349,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
     </section>
 
     <section className="sectionHeader">
-      <h2>Featured Shows</h2>
+      <h2>Featured Events</h2>
       <p>Boosted and sponsored placements will live here.</p>
     </section>
 
@@ -4409,7 +4403,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
             <section className="heroCard">
               <div>
                 <p className="eyebrow">Near You</p>
-                <h1>Shows worth leaving the house for.</h1>
+                <h1>Events worth leaving the house for.</h1>
                 <p>
                   Discover local comedy, music, game nights, festivals, and live
                   events near you.
@@ -4682,9 +4676,6 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                               {!isFree && (!hasKnownInventory || remainingTickets > 0) && (
                                 <p className="rewardStatus">
                                   Total: ${paidTotal.toFixed(2)}
-                                  {approvedTicketDiscountRedemption?.coupon_code
-                                    ? " · Promo code available in Rewards"
-                                    : ""}
                                 </p>
                               )}
                             </div>
@@ -4829,7 +4820,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
               </div>
               <div className="miniCard">
                 <strong>{producerVisitCount}</strong>
-                <span>Link Visits</span>
+                <span>Link Opens</span>
               </div>
               <div className="miniCard">
                 <strong>{upcomingProducerEvents.length}</strong>
@@ -4905,7 +4896,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                           Shares: <strong>{shareStats[event.id]?.shares || 0}</strong>
                         </span>
                         <span>
-                          Visits: <strong>{shareStats[event.id]?.visits || 0}</strong>
+                          Opens: <strong>{shareStats[event.id]?.visits || 0}</strong>
                         </span>
                       </div>
 
@@ -5444,7 +5435,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
             <h1>Turn sharing into gift cards.</h1>
             <p>
               Fans earn points by sharing events. Points can be redeemed for
-              digital gift cards and ticket discounts.
+              digital gift cards.
             </p>
 
             {redemptionMessage && <p className="authMessage">{redemptionMessage}</p>}
@@ -5642,17 +5633,13 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
             <span>Shares</span>
           </div>
           <div className="miniCard">
-            <strong>{fanStats.visits}</strong>
-            <span>Visits</span>
-          </div>
-          <div className="miniCard">
             <strong>{fanStats.eventsShared}</strong>
             <span>Events Shared</span>
           </div>
         </div>
         <p className="rewardStatus">
-          Share a show once to earn points. Referral signup and paid ticket points
-          appear here after the matching Supabase records are confirmed.
+          Share an event once to earn points. Paid ticket points appear here
+          after Stripe confirms the purchase.
         </p>
       </section>
       )}
@@ -5738,22 +5725,6 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
       </section>
       )}
 
-      {myTeamTab === "overview" && (
-      <section className="teamDashboardCard">
-        <p className="eyebrow">Saved / Shared Events</p>
-        <h3>{fanStats.eventsShared} shared</h3>
-        <p>Saved events will appear here when that feature is added.</p>
-      </section>
-      )}
-
-      {myTeamTab === "overview" && (
-      <section className="teamDashboardCard">
-        <p className="eyebrow">Following</p>
-        <h3>0 following</h3>
-        <p>Followed artists, venues, and producers will appear here later.</p>
-      </section>
-      )}
-
       {myTeamTab === "tickets" && (
       <section className="teamDashboardCard">
         <p className="eyebrow">My Tickets</p>
@@ -5762,7 +5733,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
             <h3>No tickets yet</h3>
             <p>Free RSVPs and reserved tickets will appear here.</p>
             <button className="primaryBtn" type="button" onClick={() => goToTab("fan")}>
-              Browse Shows
+              Browse Events
             </button>
           </>
         ) : (
@@ -5808,17 +5779,6 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                       : "Not checked in"}
                   </p>
                   <div className="eventActions">
-                    {reservation.confirmation_code && isTicketQrActive(reservation) && (
-                      <button
-                        className="secondaryBtn"
-                        type="button"
-                        onClick={() => toggleTicketQr(reservation.id)}
-                      >
-                        {visibleTicketQrIds[reservation.id]
-                          ? "Hide QR Code"
-                          : "View QR Code"}
-                      </button>
-                    )}
                     {events.some((event) => event.id === reservation.event_id) && (
                       <button
                         className="secondaryBtn"
@@ -5833,8 +5793,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                   </div>
                 </div>
                 {reservation.confirmation_code &&
-                isTicketQrActive(reservation) &&
-                visibleTicketQrIds[reservation.id] ? (
+                isTicketQrActive(reservation) ? (
                   <img
                     className="ticketQr"
                     src={getTicketQrImageUrl(reservation)}
@@ -5899,34 +5858,12 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                     {redemption.points_cost?.toLocaleString()} points Â·{" "}
                     {redemption.status || "pending"}
                   </p>
-                  {redemption.coupon_code && (
-                    <>
-                      <p className="rewardStatus">
-                        Code: <strong>{redemption.coupon_code}</strong>
-                      </p>
-                      <p className="rewardStatus">
-                        Copy this code and paste it in checkout to apply your ticket reward.
-                      </p>
-                    </>
-                  )}
-                  {redemption.used_at && (
+                  {redemption.tremendous_order_id && (
                     <p className="rewardStatus">
-                      Used {new Date(redemption.used_at).toLocaleString()}
+                      Tremendous order: <strong>{redemption.tremendous_order_id}</strong>
                     </p>
                   )}
                 </div>
-                {redemption.coupon_code && (
-                  <button
-                    className="secondaryBtn"
-                    type="button"
-                    disabled={Boolean(redemption.used_at) || redemption.status === "used"}
-                    onClick={() => navigator.clipboard?.writeText(redemption.coupon_code)}
-                  >
-                    {redemption.used_at || redemption.status === "used"
-                      ? "Used"
-                      : "Copy Code"}
-                  </button>
-                )}
               </div>
             ))}
           </div>
