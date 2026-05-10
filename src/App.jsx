@@ -4268,26 +4268,14 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
           </button>
           <button
             className={
-              activeTab === "streetteam" && myTeamTab === "tickets"
-                ? "tab active"
-                : "tab"
-            }
-            onClick={goToMyTickets}
-          >
-            My Tickets
-          </button>
-          <button
-            className={
-              activeTab === "streetteam" && myTeamTab !== "tickets"
-                ? "tab active"
-                : "tab"
+              activeTab === "streetteam" ? "tab active" : "tab"
             }
             onClick={() => {
               setMyTeamTab("overview");
               goToTab("streetteam");
             }}
           >
-            My Team
+            Fan
           </button>
           <button
             className={activeTab === "producer" ? "tab active" : "tab"}
