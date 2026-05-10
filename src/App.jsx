@@ -3789,7 +3789,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
     );
   }
 
-  if (isOwnerExperience || isWaitingForUserRoles) {
+  if (isOwnerExperience) {
     return (
       <div className="app">
         <header className="topbar">
