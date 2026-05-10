@@ -291,6 +291,21 @@ set search_path = public
 as $$
 declare
   v_admin_ids uuid[];
+  v_uploaded_files_deleted integer := 0;
+  v_reward_redemptions_deleted integer := 0;
+  v_points_history_deleted integer := 0;
+  v_referrals_deleted integer := 0;
+  v_share_links_deleted integer := 0;
+  v_check_ins_deleted integer := 0;
+  v_reservations_deleted integer := 0;
+  v_pending_reservations_deleted integer := 0;
+  v_tickets_deleted integer := 0;
+  v_stripe_records_deleted integer := 0;
+  v_events_deleted integer := 0;
+  v_profiles_deleted integer := 0;
+  v_admin_status_deleted integer := 0;
+  v_roles_deleted integer := 0;
+  v_auth_users_deleted integer := 0;
 begin
   if not public.is_owner_admin() then
     raise exception 'Not authorized.';
@@ -299,27 +314,87 @@ begin
   select coalesce(array_agg(id), array[]::uuid[])
   into v_admin_ids
   from auth.users
-  where lower(email) = lower(p_admin_email)
-     or id in (
-       select user_id
-       from public.user_roles
-       where role in ('owner', 'admin')
-     );
+  where lower(email) = lower(p_admin_email);
 
   if coalesce(array_length(v_admin_ids, 1), 0) = 0 then
     raise exception 'No admin account found to preserve.';
   end if;
 
-  delete from public.reward_redemptions;
-  delete from public.point_transactions;
-  delete from public.event_share_actions;
-  delete from public.ticket_reservations;
-  delete from public.ticket_types;
-  delete from public.events;
+  if to_regclass('storage.objects') is not null then
+    delete from storage.objects
+    where bucket_id = 'event-fliers';
+    get diagnostics v_uploaded_files_deleted = row_count;
+  end if;
+
+  if to_regclass('public.reward_redemptions') is not null then
+    delete from public.reward_redemptions;
+    get diagnostics v_reward_redemptions_deleted = row_count;
+  end if;
+
+  if to_regclass('public.point_transactions') is not null then
+    select count(*)
+    into v_referrals_deleted
+    from public.point_transactions
+    where source = 'referral_signup'
+       or referred_user_id is not null;
+
+    delete from public.point_transactions;
+    get diagnostics v_points_history_deleted = row_count;
+  end if;
+
+  if to_regclass('public.event_share_actions') is not null then
+    delete from public.event_share_actions;
+    get diagnostics v_share_links_deleted = row_count;
+  end if;
+
+  if to_regclass('public.ticket_reservations') is not null then
+    select count(*)
+    into v_check_ins_deleted
+    from public.ticket_reservations
+    where checked_in is true
+       or checked_in_at is not null
+       or checked_in_by is not null;
+
+    select count(*)
+    into v_pending_reservations_deleted
+    from public.ticket_reservations
+    where status = 'pending_payment';
+
+    delete from public.ticket_reservations;
+    get diagnostics v_reservations_deleted = row_count;
+  end if;
+
+  if to_regclass('public.ticket_types') is not null then
+    delete from public.ticket_types;
+    get diagnostics v_tickets_deleted = row_count;
+  end if;
+
+  if to_regclass('public.stripe_webhook_events') is not null then
+    delete from public.stripe_webhook_events;
+    get diagnostics v_stripe_records_deleted = row_count;
+  end if;
+
+  if to_regclass('public.events') is not null then
+    delete from public.events;
+    get diagnostics v_events_deleted = row_count;
+  end if;
+
+  update public.admin_user_status
+  set deactivated_by = null
+  where deactivated_by is not null
+    and deactivated_by <> all(v_admin_ids);
+
   delete from public.fan_profiles where id <> all(v_admin_ids);
+  get diagnostics v_profiles_deleted = row_count;
+
   delete from public.admin_user_status where user_id <> all(v_admin_ids);
+  get diagnostics v_admin_status_deleted = row_count;
+
   delete from public.user_roles where user_id <> all(v_admin_ids);
+  get diagnostics v_roles_deleted = row_count;
+
   delete from auth.users where id <> all(v_admin_ids);
+  get diagnostics v_auth_users_deleted = row_count;
 
   insert into public.user_roles (user_id, role)
   select unnest(v_admin_ids), 'owner'
@@ -336,18 +411,59 @@ begin
       deactivated_at = null,
       updated_at = now();
 
+  insert into public.fan_profiles (
+    id,
+    display_name,
+    email,
+    home_city,
+    favorite_event_types,
+    marketing_consent
+  )
+  select
+    users.id,
+    coalesce(nullif(split_part(users.email, '@', 1), ''), 'Admin'),
+    users.email,
+    '',
+    array[]::text[],
+    false
+  from auth.users users
+  where users.id = any(v_admin_ids)
+  on conflict (id) do nothing;
+
   return jsonb_build_object(
     'admin_accounts_preserved', coalesce(array_length(v_admin_ids, 1), 0),
-    'events_remaining', (select count(*) from public.events),
+    'non_admin_users_deleted', v_auth_users_deleted,
+    'profiles_deleted', v_profiles_deleted,
+    'admin_status_rows_deleted', v_admin_status_deleted,
+    'role_rows_deleted', v_roles_deleted,
+    'events_deleted', v_events_deleted,
+    'tickets_deleted', v_tickets_deleted,
+    'reservations_deleted', v_reservations_deleted,
+    'pending_reservations_deleted', v_pending_reservations_deleted,
+    'stripe_records_deleted', v_stripe_records_deleted,
+    'share_links_deleted', v_share_links_deleted,
+    'referrals_deleted', v_referrals_deleted,
+    'points_history_deleted', v_points_history_deleted,
+    'reward_redemptions_deleted', v_reward_redemptions_deleted,
+    'check_ins_scans_deleted', v_check_ins_deleted,
+    'uploaded_files_deleted', v_uploaded_files_deleted,
     'non_admin_users_remaining', (
       select count(*)
       from auth.users users
       where users.id <> all(v_admin_ids)
     ),
-    'tickets_remaining', (select count(*) from public.ticket_reservations),
-    'points_remaining', (select count(*) from public.point_transactions),
-    'share_actions_remaining', (select count(*) from public.event_share_actions),
-    'reward_redemptions_remaining', (select count(*) from public.reward_redemptions)
+    'events_remaining', (select count(*) from public.events),
+    'tickets_remaining', (select count(*) from public.ticket_types),
+    'reservations_remaining', (select count(*) from public.ticket_reservations),
+    'points_history_remaining', (select count(*) from public.point_transactions),
+    'share_links_remaining', (select count(*) from public.event_share_actions),
+    'reward_redemptions_remaining', (select count(*) from public.reward_redemptions),
+    'stripe_records_remaining', (
+      case
+        when to_regclass('public.stripe_webhook_events') is null then 0
+        else (select count(*) from public.stripe_webhook_events)
+      end
+    )
   );
 end;
 $$;
