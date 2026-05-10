@@ -319,6 +319,14 @@ function isConfiguredOwnerAdminEmail(email) {
   return configuredOwnerAdminEmails.includes(String(email || "").toLowerCase());
 }
 
+function formatSupabaseError(error, fallbackMessage) {
+  if (!error) return fallbackMessage;
+
+  return [fallbackMessage, error.message, error.code ? `Code: ${error.code}` : ""]
+    .filter(Boolean)
+    .join(" ");
+}
+
 function dedupeTicketReservations(reservations) {
   const statusRank = {
     paid: 4,
@@ -1487,6 +1495,45 @@ async function deleteAdminEventIfSafe(eventId) {
   setOwnerMessage("Event deleted.");
   await loadOwnerDashboard();
   await loadEventsFromSupabase();
+}
+
+async function resetAdminTestData() {
+  const confirmed = window.confirm(
+    "Reset test data? This deletes all non-admin users, events, tickets, points, shares, and reward history while preserving the admin account."
+  );
+
+  if (!confirmed) return;
+
+  const { data, error } = await supabase.rpc("reset_mvp_test_data", {
+    p_admin_email: configuredOwnerAdminEmails[0],
+  });
+
+  if (error) {
+    console.error("Admin reset failed:", error);
+    setOwnerMessage(formatSupabaseError(error, "Admin reset failed."));
+    return;
+  }
+
+  console.info("Admin reset summary:", data);
+
+  const summary = data || {};
+  setOwnerMessage(
+    `Reset complete. Deleted: users ${summary.non_admin_users_deleted || 0}, events ${
+      summary.events_deleted || 0
+    }, tickets ${summary.tickets_deleted || 0}, reservations ${
+      summary.reservations_deleted || 0
+    }, shares ${summary.share_links_deleted || 0}, referrals ${
+      summary.referrals_deleted || 0
+    }, points ${summary.points_history_deleted || 0}, rewards ${
+      summary.reward_redemptions_deleted || 0
+    }, check-ins ${summary.check_ins_scans_deleted || 0}, files ${
+      summary.uploaded_files_deleted || 0
+    }.`
+  );
+
+  await loadOwnerDashboard();
+  await loadEventsFromSupabase();
+  await loadTicketTypesFromSupabase([]);
 }
 
 async function requestRewardRedemption(reward) {
@@ -3099,15 +3146,15 @@ async function saveFanProfileForm(event) {
 
     if (!confirmed) return;
 
-    const { error } = await supabase.from("events").delete().eq("id", eventId);
+    const { error } = await supabase.rpc("delete_own_event", {
+      p_event_id: eventId,
+    });
 
     if (error) {
-      console.error(error);
-      alert("Could not delete event from Supabase.");
+      console.error("Could not delete event from Supabase:", error);
+      alert(formatSupabaseError(error, "Could not delete event from Supabase."));
       return;
     }
-
-    await deleteFlyerFromStorage(eventToDelete?.flyerPath);
 
     setEvents((currentEvents) =>
       currentEvents.filter((event) => event.id !== eventId)
@@ -3797,6 +3844,13 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                   onClick={handleLogout}
                 >
                   Sign Out
+                </button>
+                <button
+                  className="dangerBtn"
+                  type="button"
+                  onClick={resetAdminTestData}
+                >
+                  Reset Test Data
                 </button>
               </div>
 

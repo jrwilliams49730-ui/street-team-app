@@ -281,6 +281,127 @@ begin
 end;
 $$;
 
+create or replace function public.delete_own_event(
+  p_event_id bigint
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_event public.events%rowtype;
+  v_reward_redemptions_deleted integer := 0;
+  v_points_history_deleted integer := 0;
+  v_share_links_deleted integer := 0;
+  v_check_ins_deleted integer := 0;
+  v_reservations_deleted integer := 0;
+  v_tickets_deleted integer := 0;
+  v_uploaded_files_deleted integer := 0;
+  v_events_deleted integer := 0;
+begin
+  if v_user_id is null then
+    raise exception 'Log in before deleting events.';
+  end if;
+
+  select *
+  into v_event
+  from public.events
+  where id = p_event_id
+  for update;
+
+  if not found then
+    raise exception 'Event was not found.';
+  end if;
+
+  if v_event.owner_id <> v_user_id then
+    raise exception 'Only the event producer can delete this event.';
+  end if;
+
+  if to_regclass('public.reward_redemptions') is not null
+    and to_regclass('public.ticket_reservations') is not null
+  then
+    delete from public.reward_redemptions redemptions
+    where redemptions.used_ticket_reservation_id in (
+      select reservations.id
+      from public.ticket_reservations reservations
+      where reservations.event_id = p_event_id
+    );
+    get diagnostics v_reward_redemptions_deleted = row_count;
+  end if;
+
+  if to_regclass('public.point_transactions') is not null then
+    delete from public.point_transactions points
+    where points.event_id = p_event_id
+       or points.ticket_reservation_id in (
+         select reservations.id
+         from public.ticket_reservations reservations
+         where reservations.event_id = p_event_id
+       );
+    get diagnostics v_points_history_deleted = row_count;
+  end if;
+
+  if to_regclass('public.event_share_actions') is not null then
+    delete from public.event_share_actions
+    where event_id = p_event_id;
+    get diagnostics v_share_links_deleted = row_count;
+  end if;
+
+  if to_regclass('public.ticket_reservations') is not null then
+    select count(*)
+    into v_check_ins_deleted
+    from public.ticket_reservations
+    where event_id = p_event_id
+      and (
+        checked_in is true
+        or checked_in_at is not null
+        or checked_in_by is not null
+      );
+
+    delete from public.ticket_reservations
+    where event_id = p_event_id;
+    get diagnostics v_reservations_deleted = row_count;
+  end if;
+
+  if to_regclass('public.ticket_types') is not null then
+    delete from public.ticket_types
+    where event_id = p_event_id;
+    get diagnostics v_tickets_deleted = row_count;
+  end if;
+
+  if to_regclass('storage.objects') is not null
+    and nullif(trim(v_event.flyer_path), '') is not null
+  then
+    delete from storage.objects
+    where bucket_id = 'event-fliers'
+      and name = v_event.flyer_path;
+    get diagnostics v_uploaded_files_deleted = row_count;
+  end if;
+
+  delete from public.events
+  where id = p_event_id
+    and owner_id = v_user_id;
+  get diagnostics v_events_deleted = row_count;
+
+  if v_events_deleted <> 1 then
+    raise exception 'Event delete failed.';
+  end if;
+
+  return jsonb_build_object(
+    'event_id', p_event_id,
+    'events_deleted', v_events_deleted,
+    'tickets_deleted', v_tickets_deleted,
+    'reservations_deleted', v_reservations_deleted,
+    'share_links_deleted', v_share_links_deleted,
+    'points_history_deleted', v_points_history_deleted,
+    'reward_redemptions_deleted', v_reward_redemptions_deleted,
+    'check_ins_scans_deleted', v_check_ins_deleted,
+    'uploaded_files_deleted', v_uploaded_files_deleted
+  );
+end;
+$$;
+
 create or replace function public.reset_mvp_test_data(
   p_admin_email text default 'staticentertainmentsc@gmail.com'
 )
@@ -471,4 +592,5 @@ $$;
 grant execute on function public.award_account_creation_points() to authenticated;
 grant execute on function public.award_paid_ticket_points(uuid, text) to service_role;
 grant execute on function public.admin_update_redemption_status(text, text, text) to authenticated;
+grant execute on function public.delete_own_event(bigint) to authenticated;
 grant execute on function public.reset_mvp_test_data(text) to authenticated;
