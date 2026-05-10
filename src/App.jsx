@@ -66,34 +66,28 @@ const geocodeErrorMessage =
 
 const rewardTiers = [
   {
-    label: "$5 Amazon gift card",
+    label: "$5 gift card",
     points: 500,
     dollarAmount: 5,
-    rewardType: "Amazon",
+    rewardType: "gift_card",
   },
   {
-    label: "$10 Walmart gift card",
+    label: "$10 gift card",
     points: 1000,
     dollarAmount: 10,
-    rewardType: "Walmart",
+    rewardType: "gift_card",
   },
   {
-    label: "$25 Starbucks gift card",
+    label: "$25 gift card",
     points: 2500,
     dollarAmount: 25,
-    rewardType: "Starbucks",
+    rewardType: "gift_card",
   },
   {
-    label: "$25 Target gift card",
-    points: 2500,
-    dollarAmount: 25,
-    rewardType: "Target",
-  },
-  {
-    label: "$50 Virtual Visa gift card",
+    label: "$50 gift card",
     points: 5000,
     dollarAmount: 50,
-    rewardType: "Virtual Visa",
+    rewardType: "gift_card",
   },
 ];
 
@@ -310,7 +304,7 @@ function getRewardConfig(reward) {
   return {
     rewardId: label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""),
     rewardType: "gift_card",
-    selectedRewardType: reward.rewardType || label.replace(/^\$\d+\s+/, "").replace(/\s+gift card$/i, ""),
+    selectedRewardType: "gift_card",
     dollarAmount: reward.dollarAmount || Number(label.match(/\$(\d+)/)?.[1] || 0),
   };
 }
@@ -5629,7 +5623,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
           Log Out
         </button>
 
-        {!hasFanRole && (
+        {!hasFanRole && !hasFanProfile && (
           <button
             className="primaryBtn wide"
             type="button"
