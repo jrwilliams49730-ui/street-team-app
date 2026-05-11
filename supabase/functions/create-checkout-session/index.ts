@@ -16,10 +16,25 @@ Deno.serve(async (req) => {
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
     const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
     const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY") || "";
+    const stripeDebugEnabled = Deno.env.get("STRIPE_DEBUG") === "true";
     const siteUrl =
       Deno.env.get("APP_URL") ||
       Deno.env.get("SITE_URL") ||
       "http://127.0.0.1:5173";
+
+    const stripeKeyMode = stripeSecretKey.startsWith("sk_test_")
+      ? "test"
+      : stripeSecretKey.startsWith("sk_live_")
+      ? "live"
+      : stripeSecretKey
+      ? "unknown"
+      : "missing";
+
+    console.info("create-checkout-session config", {
+      stripeSecretKeyExists: Boolean(stripeSecretKey),
+      stripeKeyMode,
+      siteUrl,
+    });
 
     if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey || !stripeSecretKey) {
       throw new Error("Missing required checkout environment variables.");
@@ -40,6 +55,22 @@ Deno.serve(async (req) => {
       httpClient: Stripe.createFetchHttpClient(),
     });
 
+    let stripeAccountId = "";
+
+    try {
+      const stripeAccount = await stripe.accounts.retrieve();
+      stripeAccountId = stripeAccount.id || "";
+      console.info("create-checkout-session Stripe account", {
+        stripeAccountId,
+        stripeKeyMode,
+      });
+    } catch (accountError) {
+      console.warn("create-checkout-session could not read Stripe account", {
+        message: accountError instanceof Error ? accountError.message : String(accountError),
+        stripeKeyMode,
+      });
+    }
+
     const {
       event_id: eventId,
       ticket_type_id: ticketTypeId,
@@ -51,6 +82,13 @@ Deno.serve(async (req) => {
       typeof shareCode === "string" && shareCode.trim()
         ? shareCode.trim()
         : null;
+
+    console.info("create-checkout-session request", {
+      eventId,
+      ticketTypeId,
+      quantity: requestedQuantity,
+      hasShareCode: Boolean(checkoutShareCode),
+    });
 
     const { data: userData, error: userError } = await userSupabase.auth.getUser();
 
@@ -152,6 +190,23 @@ Deno.serve(async (req) => {
         },
       });
 
+      console.info("create-checkout-session created Stripe session", {
+        stripeAccountId,
+        stripeKeyMode,
+        checkoutSessionId: session.id,
+        checkoutUrl: session.url,
+        checkoutUrlIsStripeHosted: Boolean(
+          session.url?.startsWith("https://checkout.stripe.com"),
+        ),
+        checkoutMode: session.mode,
+        amountTotal: session.amount_total,
+        currency: session.currency,
+        eventId,
+        ticketTypeId,
+        reservationId: reservation.id,
+        userId: userData.user.id,
+      });
+
       const { error: updateError } = await serviceSupabase
         .from("ticket_reservations")
         .update({
@@ -168,7 +223,24 @@ Deno.serve(async (req) => {
         throw updateError;
       }
 
-      return new Response(JSON.stringify({ url: session.url }), {
+      return new Response(JSON.stringify({
+        url: session.url,
+        ...(stripeDebugEnabled
+          ? {
+              debug: {
+                checkoutSessionId: session.id,
+                checkoutUrlIsStripeHosted: Boolean(
+                  session.url?.startsWith("https://checkout.stripe.com"),
+                ),
+                checkoutMode: session.mode,
+                amountTotal: session.amount_total,
+                currency: session.currency,
+                stripeKeyMode,
+                stripeAccountId,
+              },
+            }
+          : {}),
+      }), {
         headers: {
           ...corsHeaders,
           "Content-Type": "application/json",

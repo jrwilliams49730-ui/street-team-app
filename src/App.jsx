@@ -522,7 +522,7 @@ function getInitialTicketMessage() {
   const checkoutStatus = params.get("ticket_checkout");
 
   if (checkoutStatus === "success") {
-    return "Payment successful. Your ticket will appear in My Team / My Tickets after Stripe confirms it.";
+    return "Payment is being confirmed. Check Fan - Tickets.";
   }
 
   if (checkoutStatus === "cancelled") {
@@ -721,6 +721,7 @@ function App() {
   const hasProducerRole = userRoles.includes("producer");
   const hasOwnerAdminRole =
     userRoles.includes("owner") || userRoles.includes("admin");
+  const canAccessProducerTools = hasProducerRole || hasOwnerAdminRole;
 
   const [fanStats, setFanStats] = useState({
     points: 0,
@@ -795,6 +796,8 @@ function App() {
   const [radiusMiles, setRadiusMiles] = useState(25);
   const [isRadiusFilterActive, setIsRadiusFilterActive] = useState(false);
   const [eventLocationSearch, setEventLocationSearch] = useState("");
+  const [radiusSearchLocation, setRadiusSearchLocation] = useState(null);
+  const [radiusSearchError, setRadiusSearchError] = useState("");
   const [shareMessage, setShareMessage] = useState("");
   const [shareStats, setShareStats] = useState({});
   const [, setIsLoadingShareStats] = useState(false);
@@ -959,6 +962,16 @@ function App() {
 
     cancelOwnPendingTicketReservation(reservationId);
   }, [user]);
+
+  useEffect(() => {
+    if (!user || checkoutReturn.status !== "success") return;
+
+    setMyTeamTab("tickets");
+    setActiveTab("streetteam");
+    setTicketMessage("Payment is being confirmed. Check Fan - Tickets.");
+    loadTicketReservationsFromSupabase();
+    loadFanStatsFromSupabase();
+  }, [user, checkoutReturn.status]);
 
   async function loadEventsFromSupabase() {
     setIsLoadingEvents(true);
@@ -1866,6 +1879,10 @@ async function startPaidTicketCheckout(ticketType) {
     return;
   }
 
+  if (import.meta.env.DEV && data.debug) {
+    console.info("Stripe checkout debug", data.debug);
+  }
+
   window.location.href = data.url;
 }
 
@@ -2614,24 +2631,6 @@ async function loadUserRoles(currentUser) {
         return;
       }
 
-      if (accountTypeForSubmit === "producer" && role !== "producer") {
-        const roleResult = await saveUserRoleForUser(loggedInUser.id, "producer");
-
-        if (roleResult?.error) {
-          setAuthMessage(
-            formatSupabaseError(
-              roleResult.error,
-              "Logged in, but producer access could not be saved."
-            )
-          );
-          setActiveTab("producer");
-          return;
-        }
-
-        role = "producer";
-        setSelectedAccountType("producer");
-      }
-
       setActiveTab(
         role === "fan"
           ? "streetteam"
@@ -2932,7 +2931,7 @@ async function saveFanProfileForm(event) {
   async function createEvent(event) {
     event.preventDefault();
 
-    if (!user || !hasProducerRole) {
+    if (!user || !canAccessProducerTools) {
       alert("Log in as a producer before creating events.");
       setActiveTab("producer");
       return;
@@ -2958,9 +2957,7 @@ async function saveFanProfileForm(event) {
       ? getEventPriceFromTicketTypes(form.ticketTypes)
       : "Free";
     const coordinates = await resolveEventCoordinates(form);
-    if (coordinates.warning) {
-      alert(coordinates.warning);
-    }
+    const locationWarning = coordinates.warning;
 
     let uploadedFlyer = {
       publicUrl: "",
@@ -3027,11 +3024,11 @@ async function saveFanProfileForm(event) {
     setForm(emptyForm);
     setSelectedEvent(null);
     setActiveTab("producer");
-    alert("Event created.");
+    alert(locationWarning ? "Event created. Radius search may be less accurate until location is verified." : "Event created.");
   }
 
   function startEdit(event) {
-    if (!user || !hasProducerRole || event.ownerId !== user.id) {
+    if (!user || !canAccessProducerTools || (!hasOwnerAdminRole && event.ownerId !== user.id)) {
       alert("Log in as the event producer before editing events.");
       setActiveTab("producer");
       return;
@@ -3076,7 +3073,7 @@ async function saveFanProfileForm(event) {
 
     const originalEvent = events.find((item) => item.id === editingEventId);
 
-    if (!user || !hasProducerRole || originalEvent?.ownerId !== user.id) {
+    if (!user || !canAccessProducerTools || (!hasOwnerAdminRole && originalEvent?.ownerId !== user.id)) {
       alert("Log in as the event producer before saving changes.");
       setActiveTab("producer");
       return;
@@ -3109,9 +3106,6 @@ async function saveFanProfileForm(event) {
     ) {
       try {
         coordinates = await resolveEventCoordinates(editForm);
-        if (coordinates.warning) {
-          alert(coordinates.warning);
-        }
       } catch (error) {
         console.error(error);
         alert(geocodeWarningMessage);
@@ -3212,13 +3206,17 @@ async function saveFanProfileForm(event) {
     }
 
     cancelEdit();
-    alert("Event updated.");
+    alert(
+      coordinates.warning
+        ? "Event updated. Radius search may be less accurate until location is verified."
+        : "Event updated."
+    );
   }
 
   async function deleteEvent(eventId) {
     const eventToDelete = events.find((event) => event.id === eventId);
 
-    if (!user || !hasProducerRole || eventToDelete?.ownerId !== user.id) {
+    if (!user || !canAccessProducerTools || (!hasOwnerAdminRole && eventToDelete?.ownerId !== user.id)) {
       alert("Log in as the event producer before deleting events.");
       setActiveTab("producer");
       return;
@@ -3260,10 +3258,43 @@ async function saveFanProfileForm(event) {
       setActiveTab("fan");
     }
 
-    if (editingEventId === eventId) {
+  if (editingEventId === eventId) {
       cancelEdit();
     }
   }
+
+async function applyRadiusSearch(nextRadiusMiles = radiusMiles) {
+  const zipCode = eventLocationSearch.trim();
+
+  if (!/^\d{5}$/.test(zipCode)) {
+    setIsRadiusFilterActive(false);
+    setRadiusSearchLocation(null);
+    setRadiusSearchError("Enter a valid ZIP code.");
+    return;
+  }
+
+  setRadiusSearchError("");
+
+  try {
+    const coordinates = await geocodeEventAddress({ zipCode });
+    setRadiusSearchLocation(coordinates);
+    setRadiusMiles(nextRadiusMiles);
+    setIsRadiusFilterActive(true);
+  } catch (error) {
+    console.warn("ZIP radius search failed:", error);
+    setIsRadiusFilterActive(false);
+    setRadiusSearchLocation(null);
+    setRadiusSearchError("Enter a valid ZIP code.");
+  }
+}
+
+function clearRadiusSearch() {
+  setEventLocationSearch("");
+  setIsRadiusFilterActive(false);
+  setRadiusSearchLocation(null);
+  setRadiusSearchError("");
+}
+
 const producerEvents = user
   ? events.filter((event) => event.ownerId === user.id)
   : [];
@@ -3280,7 +3311,7 @@ const producerVisitCount = producerEvents.reduce(
 
 const eventsWithDistance = events.map((event) => ({
   ...event,
-  distanceMiles: getDistanceMiles(userLocation, event),
+  distanceMiles: getDistanceMiles(radiusSearchLocation, event),
 }));
 
 const hasAnyEventCoordinates = eventsWithDistance.some(
@@ -3306,7 +3337,7 @@ const eventsMatchingLocationSearch = normalizedLocationSearch
   : eventsWithDistance;
 
 const visibleEvents =
-  isRadiusFilterActive && userLocation && hasAnyEventCoordinates
+  isRadiusFilterActive && radiusSearchLocation && hasAnyEventCoordinates
     ? eventsWithDistance
         .filter(
           (event) =>
@@ -3319,15 +3350,9 @@ const visibleEvents =
         })
     : eventsMatchingLocationSearch;
 
-const locationMessage = userLocation
-  ? isRadiusFilterActive && hasAnyEventCoordinates
-    ? `Showing events within ${radiusMiles} miles.`
-    : "Showing all upcoming events."
-  : locationStatus === "denied"
-  ? "Location was not shared. Search by city or zip code instead."
-  : locationStatus === "unavailable"
-  ? "Location is not available in this browser. Search by city or zip code instead."
-  : "Checking location. Showing all upcoming events until nearby results are available.";
+const locationMessage = isRadiusFilterActive
+  ? `Showing events within ${radiusMiles} miles of ${eventLocationSearch.trim()}.`
+  : "Showing all upcoming events.";
 
 const selectedEventTicketTypes = selectedEvent
   ? ticketTypes.filter((ticketType) => ticketType.eventId === selectedEvent.id)
@@ -3354,6 +3379,11 @@ const selectedEventDisplayTicketTypes =
         },
       ]
     : selectedEventTicketTypes;
+
+const selectedEventIsFreeListingOnly =
+  Boolean(selectedEvent) &&
+  selectedEventDisplayTicketTypes.length === 0 &&
+  getNumericEventPrice(selectedEvent) === 0;
 
 const hasReservationForSelectedEvent = Boolean(
   selectedEvent &&
@@ -3392,7 +3422,12 @@ const pointTotals = pointHistory.reduce(
 );
 
 function getEventDateValue(date, time = "") {
-  const parsed = new Date(`${date || ""} ${time || ""}`.trim());
+  const rawDate = String(date || "").trim();
+  const rawTime = String(time || "").trim();
+  const normalizedDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
+    ? `${rawDate}T${rawTime || "23:59"}`
+    : `${rawDate} ${new Date().getFullYear()} ${rawTime || "11:59 PM"}`;
+  const parsed = new Date(normalizedDate.trim());
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
@@ -4118,8 +4153,8 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                         <h3>{item.display_name || item.email || "User"}</h3>
                         <p>{item.email || item.profile_email || item.id}</p>
                         <p className="rewardStatus">
-                          {(item.roles || []).join(", ") || "No role"} Â·{" "}
-                          {Number(item.points_balance || 0).toLocaleString()} points Â·{" "}
+                          {(item.roles || []).join(", ") || "No role"} -{" "}
+                          {Number(item.points_balance || 0).toLocaleString()} points -{" "}
                           {item.created_at
                             ? new Date(item.created_at).toLocaleDateString()
                             : "Unknown date"}
@@ -4127,7 +4162,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                         <p className="rewardStatus">
                           {item.is_active === false ? "Deactivated" : "Active"}
                           {item.deactivated_at
-                            ? ` Â· ${new Date(item.deactivated_at).toLocaleString()}`
+                            ? ` - ${new Date(item.deactivated_at).toLocaleString()}`
                             : ""}
                         </p>
                       </div>
@@ -4179,7 +4214,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                         <h3>{item.display_name || item.email || "Producer"}</h3>
                         <p>{item.email || item.id}</p>
                         <p className="rewardStatus">
-                          {item.event_count || 0} events Â· Producer approval/suspension
+                          {item.event_count || 0} events - Producer approval/suspension
                           is not in the current schema yet.
                         </p>
                       </div>
@@ -4213,12 +4248,12 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                       <div>
                         <h3>{item.title}</h3>
                         <p>
-                          {item.venue} Â· {item.city} Â· {item.event_date} {item.event_time}
+                          {item.venue} - {item.city} - {item.event_date} {item.event_time}
                         </p>
                         <p className="rewardStatus">
-                          {item.owner_email || item.owner_id} ·{" "}
-                          {item.is_ticketed ? "Ticketed" : "Not ticketed"} ·{" "}
-                          {item.status || "active"} · {item.ticket_count || 0} tickets/orders
+                          {item.owner_email || item.owner_id} -{" "}
+                          {item.is_ticketed ? "Ticketed" : "Not ticketed"} -{" "}
+                          {item.status || "active"} - {item.ticket_count || 0} tickets/orders
                         </p>
                       </div>
                       <div className="eventActions">
@@ -4253,12 +4288,12 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                       <div>
                         <h3>{item.event_title || "Event"}</h3>
                         <p>
-                          {item.ticket_type || "Ticket"} Â· Qty {item.quantity} Â·{" "}
+                          {item.ticket_type || "Ticket"} - Qty {item.quantity} -{" "}
                           {formatTicketStatus(item.status)}
                         </p>
                         <p className="rewardStatus">
-                          {item.buyer_email || item.user_id} Â·{" "}
-                          {item.confirmation_code || "No code"} Â·{" "}
+                          {item.buyer_email || item.user_id} -{" "}
+                          {item.confirmation_code || "No code"} -{" "}
                           {item.checked_in ? "Checked in" : "Not checked in"}
                         </p>
                       </div>
@@ -4280,8 +4315,8 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                       <div>
                         <h3>{item.reward_label}</h3>
                         <p>
-                          {item.fan_display_name || item.user_email || item.user_id} Â·{" "}
-                          {item.points_cost} points Â· {item.status}
+                          {item.fan_display_name || item.user_email || item.user_id} -{" "}
+                          {item.points_cost} points - {item.status}
                         </p>
                         <p className="rewardStatus">
                           {item.created_at
@@ -4387,11 +4422,11 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                           {Number(item.points || 0).toLocaleString()} points
                         </h3>
                         <p>
-                          {item.user_email || item.user_id} Â·{" "}
+                          {item.user_email || item.user_id} -{" "}
                           {item.source || item.transaction_type || "points"}
                         </p>
                         <p className="rewardStatus">
-                          {item.description || item.reward_label || "Ledger entry"} Â·{" "}
+                          {item.description || item.reward_label || "Ledger entry"} -{" "}
                           {item.created_at
                             ? new Date(item.created_at).toLocaleString()
                             : "Unknown date"}
@@ -4430,7 +4465,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                           <h3>{item.activity_type}</h3>
                           <p>{item.email || item.user_id}</p>
                           <p className="rewardStatus">
-                            {item.transaction_count} transactions Â· {item.point_total} points
+                            {item.transaction_count} transactions - {item.point_total} points
                           </p>
                         </div>
                       </div>
@@ -4560,7 +4595,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
             <h3>{event.title}</h3>
             <p className="venue">{event.venue}</p>
             <p className="details">
-              {event.city} Â· {event.date} Â· {event.time}
+              {event.city} - {event.date} - {event.time}
             </p>
 
             <div className="eventActions">
@@ -4581,7 +4616,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
 
     <section className="sponsorBanner">
       <p className="eyebrow">Sponsor Spot</p>
-      <h2>Your brand could own this cityâ€™s live event feed.</h2>
+      <h2>Your brand could own this city's live event feed.</h2>
       <p>
         Future sponsor banners, boosted event placements, and local brand
         partnerships will appear here.
@@ -4639,40 +4674,51 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
             </section>
 
             <div className="discoveryControls">
-              {userLocation && (
-                <label className="formField">
-                  Radius
-                  <select
-                    value={radiusMiles}
-                    onChange={(e) => {
-                      setRadiusMiles(Number(e.target.value));
-                      setIsRadiusFilterActive(true);
-                    }}
-                  >
-                    <option value={5}>5 miles</option>
-                    <option value={10}>10 miles</option>
-                    <option value={25}>25 miles</option>
-                    <option value={50}>50 miles</option>
-                  </select>
-                </label>
-              )}
-              {!userLocation && (
-                <label className="formField">
-                  City or ZIP
-                  <input
-                    value={eventLocationSearch}
-                    onChange={(e) => {
-                      setEventLocationSearch(e.target.value);
+              <label className="formField">
+                ZIP
+                <input
+                  value={eventLocationSearch}
+                  onChange={(e) => {
+                    setEventLocationSearch(e.target.value);
+                    if (!e.target.value.trim()) {
+                      clearRadiusSearch();
+                    } else {
                       setIsRadiusFilterActive(false);
-                    }}
-                    placeholder="Myrtle Beach or 29577"
-                  />
-                </label>
+                      setRadiusSearchLocation(null);
+                    }
+                  }}
+                  placeholder="29577"
+                />
+              </label>
+              <label className="formField">
+                Radius
+                <select
+                  value={radiusMiles}
+                  onChange={(e) => {
+                    const nextRadiusMiles = Number(e.target.value);
+                    setRadiusMiles(nextRadiusMiles);
+                    applyRadiusSearch(nextRadiusMiles);
+                  }}
+                >
+                  <option value={5}>5 miles</option>
+                  <option value={10}>10 miles</option>
+                  <option value={25}>25 miles</option>
+                  <option value={50}>50 miles</option>
+                </select>
+              </label>
+              <button className="secondaryBtn" type="button" onClick={() => applyRadiusSearch()}>
+                Apply Radius
+              </button>
+              {isRadiusFilterActive && (
+                <button className="secondaryBtn" type="button" onClick={clearRadiusSearch}>
+                  Clear Radius
+                </button>
               )}
             </div>
 
             {isLoadingEvents && <p>Loading events...</p>}
             {eventError && <p className="errorText">{eventError}</p>}
+            {radiusSearchError && <p className="errorText">{radiusSearchError}</p>}
             {shareMessage && <p className="authMessage">{shareMessage}</p>}
             {!isLoadingEvents && !eventError && events.length === 0 && (
               <section className="emptyState">
@@ -4685,10 +4731,15 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
               events.length > 0 &&
               visibleEvents.length === 0 && (
                 <section className="emptyState">
-                  <h3>No matching events.</h3>
+                  <h3>
+                    {isRadiusFilterActive
+                      ? "No events found within this radius."
+                      : "No matching events."}
+                  </h3>
                   <p>
-                    Try expanding the radius, searching another city or zip code,
-                    or check back when more shows are added.
+                    {isRadiusFilterActive
+                      ? "Clear radius to see all upcoming events."
+                      : "Try another ZIP, or check back when more shows are added."}
                   </p>
                 </section>
               )}
@@ -4714,7 +4765,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                       </p>
                     )}
                     <p className="details">
-                      {event.city} Â· {event.date} Â· {event.time}
+                      {event.city} - {event.date} - {event.time}
                     </p>
 
                     <div className="eventActions">
@@ -4741,7 +4792,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
         {activeTab === "event" && selectedEvent && (
           <section className="eventDetail">
             <button className="backBtn" onClick={() => goToTab("fan")}>
-              â† Back to events
+              &lt;- Back to events
             </button>
 
             <EventFlyer event={selectedEvent} detail />
@@ -4794,10 +4845,15 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
 
                   {ticketMessage && <p className="authMessage">{ticketMessage}</p>}
 
-                  {selectedEventDisplayTicketTypes.length === 0 ? (
+                  {selectedEventIsFreeListingOnly ? (
                     <div className="emptyState">
-                      <h3>Tickets coming soon.</h3>
-                      <p>The producer has not published ticket types yet.</p>
+                      <h3>Free event - no ticket required.</h3>
+                      <p>Show up and enjoy the event.</p>
+                    </div>
+                  ) : selectedEventDisplayTicketTypes.length === 0 ? (
+                    <div className="emptyState">
+                      <h3>No ticket types available.</h3>
+                      <p>Check back later for RSVP or paid ticket options.</p>
                     </div>
                   ) : (
                     <div className="rewardsList">
@@ -4842,7 +4898,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                                 {isFree
                                   ? "Free RSVP"
                                   : `$${Number(ticketType.price).toFixed(2)}`}
-                                {" Â· "}
+                                {" - "}
                                 {hasKnownInventory
                                   ? `${remainingTickets} remaining`
                                   : "Remaining quantity unavailable"}
@@ -4925,15 +4981,24 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                 >
                   Share Event +{selectedEvent.points}
                 </button>
-                <button className="secondaryBtn" type="button">
-                  Tickets Above
-                </button>
+                {hasReservationForSelectedEvent && (
+                  <button
+                    className="secondaryBtn"
+                    type="button"
+                    onClick={() => {
+                      setMyTeamTab("tickets");
+                      goToTab("streetteam");
+                    }}
+                  >
+                    Go to Tickets
+                  </button>
+                )}
               </div>
             </div>
           </section>
         )}
 
-  {activeTab === "producer" && (!user || !hasProducerRole) && (
+  {activeTab === "producer" && (!user || !canAccessProducerTools) && (
   <section className="panel">
     <p className="eyebrow">Producer Dashboard</p>
     <h1>Producer login required.</h1>
@@ -4942,14 +5007,14 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
       shows, and track who helped promote.
     </p>
 
-    {user && !hasProducerRole && (
+    {user && !canAccessProducerTools && (
       <p className="authMessage">
         {authMessage ||
           "This account is not marked as a producer account. Sign up from Producer with a producer account to manage events."}
       </p>
     )}
 
-    {user && !hasProducerRole ? (
+    {user && !canAccessProducerTools ? (
       <div className="eventActions">
         <button
           className="secondaryBtn"
@@ -4965,7 +5030,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
   </section>
 )}
 
-        {activeTab === "producer" && user && hasProducerRole && (
+        {activeTab === "producer" && user && canAccessProducerTools && (
           <section className="panel">
             <p className="eyebrow">Producer Dashboard</p>
             <h1>Manage your events.</h1>
@@ -5079,7 +5144,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                       <h3>{event.title}</h3>
                       <p className="venue">{event.venue}</p>
                       <p className="details">
-                        {event.city} Â· {event.date} Â· {event.time}
+                        {event.city} - {event.date} - {event.time}
                       </p>
                       <div className="shareStats">
                         <span>
@@ -5098,7 +5163,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                             <div className="promoterRow" key={promoter.name}>
                               <span>{promoter.name}</span>
                               <em>
-                                {promoter.shares} shares Â· {promoter.visits} visits Â· {" "}
+                                {promoter.shares} shares - {promoter.visits} visits - {" "}
                                 {promoter.points} pts
                               </em>
                             </div>
@@ -5383,8 +5448,8 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                           <h3>{verifyResult.message}</h3>
                           {verifyResult.reservation && (
                             <p>
-                              {verifyResult.reservation.attendeeName} Â·{" "}
-                              {verifyResult.reservation.eventTitle} Â·{" "}
+                              {verifyResult.reservation.attendeeName} -{" "}
+                              {verifyResult.reservation.eventTitle} -{" "}
                               {verifyResult.reservation.confirmation_code}
                             </p>
                           )}
@@ -5434,11 +5499,11 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                         <h3>{reservation.attendeeName}</h3>
                         <p>{reservation.eventTitle}</p>
                         <p>
-                          {reservation.ticketTypeName} Â· Qty {reservation.quantity} Â·{" "}
+                          {reservation.ticketTypeName} - Qty {reservation.quantity} -{" "}
                           {formatTicketStatus(reservation.status)}
                         </p>
                         <p className="rewardStatus">
-                          {reservation.fan_email || reservation.user_id} Â·{" "}
+                          {reservation.fan_email || reservation.user_id} -{" "}
                           {new Date(reservation.created_at).toLocaleString()}
                         </p>
                         <p className="rewardStatus">
@@ -5683,12 +5748,6 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
     <p className="eyebrow">My Team</p>
     <h1>Your street team dashboard.</h1>
     {ticketMessage && <p className="authMessage">{ticketMessage}</p>}
-    {checkoutReturn.status === "success" && (
-      <p className="authMessage">
-        Payment successful. Your paid ticket will show as paid after Stripe confirms
-        through the webhook.
-      </p>
-    )}
 
     <div className="tabs sectionTabs">
       {[
@@ -5942,20 +6001,20 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                     </p>
                   )}
                   <p>
-                    {reservation.ticketTypeName} Â· Qty {reservation.quantity} Â·{" "}
+                    {reservation.ticketTypeName} - Qty {reservation.quantity} -{" "}
                     {formatTicketStatus(reservation.status)}
                   </p>
                   <p className="rewardStatus">
                     {reservation.eventDate} {reservation.eventTime}
                     {reservation.confirmation_code
-                      ? ` Â· ${reservation.confirmation_code}`
+                      ? ` - ${reservation.confirmation_code}`
                       : ""}
                   </p>
                   {(reservation.eventVenue || reservation.eventCity) && (
                     <p className="rewardStatus">
                       {[reservation.eventVenue, reservation.eventCity]
                         .filter(Boolean)
-                        .join(" Â· ")}
+                        .join(" - ")}
                     </p>
                   )}
                   <p className="rewardStatus">
@@ -6010,15 +6069,15 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                 <div>
                   <h3>{reservation.eventTitle}</h3>
                   <p>
-                    {reservation.ticketTypeName} Â· Qty {reservation.quantity} Â·{" "}
+                    {reservation.ticketTypeName} - Qty {reservation.quantity} -{" "}
                     {formatTicketStatus(reservation.status)}
                   </p>
                   <p className="rewardStatus">
                     {reservation.eventDate} {reservation.eventTime}
                     {reservation.eventVenue || reservation.eventCity
-                      ? ` Â· ${[reservation.eventVenue, reservation.eventCity]
+                      ? ` - ${[reservation.eventVenue, reservation.eventCity]
                           .filter(Boolean)
-                          .join(" Â· ")}`
+                          .join(" - ")}`
                       : ""}
                   </p>
                   {reservation.confirmation_code && (
@@ -6046,7 +6105,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                 <div>
                   <h3>{redemption.reward_label}</h3>
                   <p>
-                    {redemption.points_cost?.toLocaleString()} points Â·{" "}
+                    {redemption.points_cost?.toLocaleString()} points -{" "}
                     {redemption.status || "pending"}
                   </p>
                   {redemption.tremendous_order_id && (
@@ -6149,7 +6208,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
               <div>
                 <h3>{redemption.reward_label}</h3>
                 <p>
-                  {redemption.points_cost?.toLocaleString()} points Â·{" "}
+                  {redemption.points_cost?.toLocaleString()} points -{" "}
                   {redemption.status || "pending"}
                 </p>
               </div>

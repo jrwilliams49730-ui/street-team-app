@@ -1,5 +1,3 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.105.1";
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -11,27 +9,10 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
     const apiKey = Deno.env.get("GEOCODING_API_KEY") || "";
 
-    if (!supabaseUrl || !supabaseAnonKey || !apiKey) {
+    if (!apiKey) {
       throw new Error("Missing required geocoding environment variables.");
-    }
-
-    const authHeader = req.headers.get("Authorization") || "";
-    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-      global: {
-        headers: {
-          Authorization: authHeader,
-        },
-      },
-    });
-
-    const { data: userData, error: userError } = await supabase.auth.getUser();
-
-    if (userError || !userData.user) {
-      throw new Error("Log in before geocoding events.");
     }
 
     const {
@@ -42,14 +23,8 @@ Deno.serve(async (req) => {
       zip_code: zipCode = "",
     } = await req.json();
 
-    if (
-      !String(venueName).trim() ||
-      !String(streetAddress).trim() ||
-      !String(city).trim() ||
-      !String(state).trim() ||
-      !String(zipCode).trim()
-    ) {
-      throw new Error("Enter venue name, street address, city, state, and zip code.");
+    if (!String(zipCode).trim()) {
+      throw new Error("Enter a valid ZIP code.");
     }
 
     const addressParts = [venueName, streetAddress, city, state, zipCode, "USA"]
