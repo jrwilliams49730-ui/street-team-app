@@ -65,6 +65,10 @@ const geocodeErrorMessage =
   "We could not verify this address. Please check the venue address and zip code.";
 const geocodeWarningMessage =
   "Address could not be verified. You can still save this event, but radius search may be less accurate.";
+const flyerMaxUploadBytes = 15 * 1024 * 1024;
+const allowedFlyerMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+const allowedFlyerExtensions = /\.(jpe?g|png|webp)$/i;
+const flyerAcceptTypes = ".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp";
 
 const rewardTiers = [
   {
@@ -789,6 +793,7 @@ function App() {
       : "unavailable"
   );
   const [radiusMiles, setRadiusMiles] = useState(25);
+  const [isRadiusFilterActive, setIsRadiusFilterActive] = useState(false);
   const [eventLocationSearch, setEventLocationSearch] = useState("");
   const [shareMessage, setShareMessage] = useState("");
   const [shareStats, setShareStats] = useState({});
@@ -936,35 +941,6 @@ function App() {
 
     loadOwnerDashboard();
   }, [isOwnerExperience, user, hasOwnerAdminRole]);
-
-  useEffect(() => {
-    if (
-      activeTab !== "producer" ||
-      !user ||
-      !areUserRolesLoaded ||
-      hasProducerRole ||
-      isSavingProducerAccess
-    ) {
-      return;
-    }
-
-    saveUserRoleForUser(user.id, "producer").then((roleResult) => {
-      if (roleResult?.error) {
-        setAuthMessage(
-          formatSupabaseError(
-            roleResult.error,
-            "Producer access could not be saved."
-          )
-        );
-      }
-    });
-  }, [
-    activeTab,
-    user,
-    areUserRolesLoaded,
-    hasProducerRole,
-    isSavingProducerAccess,
-  ]);
 
   useEffect(() => {
     if (!isLoadingEvents && events.length > 0) {
@@ -2897,13 +2873,16 @@ async function saveFanProfileForm(event) {
   function handleFlyerUpload(file, mode = "create") {
     if (!file) return;
 
-    if (!file.type.startsWith("image/")) {
-      alert("Please upload an image file.");
+    const hasAllowedType = allowedFlyerMimeTypes.has(file.type);
+    const hasAllowedExtension = allowedFlyerExtensions.test(file.name || "");
+
+    if (!hasAllowedType && !hasAllowedExtension) {
+      alert("Please upload a JPG, JPEG, PNG, or WEBP flyer.");
       return;
     }
 
-    if (file.size > 5 * 1024 * 1024) {
-      alert("Please use a flier image under 5MB.");
+    if (file.size > flyerMaxUploadBytes) {
+      alert("Flyer must be under 15 MB.");
       return;
     }
 
@@ -3327,11 +3306,11 @@ const eventsMatchingLocationSearch = normalizedLocationSearch
   : eventsWithDistance;
 
 const visibleEvents =
-  userLocation && hasAnyEventCoordinates
+  isRadiusFilterActive && userLocation && hasAnyEventCoordinates
     ? eventsWithDistance
         .filter(
           (event) =>
-            event.distanceMiles === null || event.distanceMiles <= radiusMiles
+            event.distanceMiles !== null && event.distanceMiles <= radiusMiles
         )
         .sort((firstEvent, secondEvent) => {
           if (firstEvent.distanceMiles === null) return 1;
@@ -3341,9 +3320,9 @@ const visibleEvents =
     : eventsMatchingLocationSearch;
 
 const locationMessage = userLocation
-  ? hasAnyEventCoordinates
+  ? isRadiusFilterActive && hasAnyEventCoordinates
     ? `Showing events within ${radiusMiles} miles.`
-    : "Location is on. Showing all events until event coordinates are added."
+    : "Showing all upcoming events."
   : locationStatus === "denied"
   ? "Location was not shared. Search by city or zip code instead."
   : locationStatus === "unavailable"
@@ -4665,7 +4644,10 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                   Radius
                   <select
                     value={radiusMiles}
-                    onChange={(e) => setRadiusMiles(Number(e.target.value))}
+                    onChange={(e) => {
+                      setRadiusMiles(Number(e.target.value));
+                      setIsRadiusFilterActive(true);
+                    }}
                   >
                     <option value={5}>5 miles</option>
                     <option value={10}>10 miles</option>
@@ -4679,7 +4661,10 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                   City or ZIP
                   <input
                     value={eventLocationSearch}
-                    onChange={(e) => setEventLocationSearch(e.target.value)}
+                    onChange={(e) => {
+                      setEventLocationSearch(e.target.value);
+                      setIsRadiusFilterActive(false);
+                    }}
                     placeholder="Myrtle Beach or 29577"
                   />
                 </label>
@@ -4959,9 +4944,8 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
 
     {user && !hasProducerRole && (
       <p className="authMessage">
-        {isSavingProducerAccess
-          ? "Setting up producer access..."
-          : authMessage || "Setting up producer access for this account."}
+        {authMessage ||
+          "This account is not marked as a producer account. Sign up from Producer with a producer account to manage events."}
       </p>
     )}
 
@@ -5251,7 +5235,7 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                               Replace Flier
                               <input
                                 type="file"
-                                accept="image/*"
+                                accept={flyerAcceptTypes}
                                 onChange={(e) =>
                                   handleFlyerUpload(e.target.files[0], "edit")
                                 }
@@ -5602,8 +5586,9 @@ const visibleOwnerPoints = ownerPoints.filter((item) => {
                 <label className="formField fullSpan">
                   Event Flier
                   <input
+                    key={`${form.flyerName}-${form.flyerImage}`}
                     type="file"
-                    accept="image/*"
+                    accept={flyerAcceptTypes}
                     onChange={(e) => handleFlyerUpload(e.target.files[0])}
                   />
                 </label>
