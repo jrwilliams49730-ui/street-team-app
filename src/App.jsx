@@ -63,6 +63,8 @@ const appBasePath = import.meta.env.BASE_URL;
 const ownerAdminRoutePath = `${appBasePath.replace(/\/$/, "")}/street-team-hq`;
 const geocodeErrorMessage =
   "We could not verify this address. Please check the venue address and zip code.";
+const geocodeWarningMessage =
+  "Address could not be verified. You can still save this event, but radius search may be less accurate.";
 
 const rewardTiers = [
   {
@@ -430,6 +432,16 @@ function hasCompleteEventAddress(source) {
   );
 }
 
+function hasRequiredEventLocation(source) {
+  return Boolean(
+    (String(source?.venueName || source?.venue || "").trim() ||
+      String(source?.streetAddress || "").trim()) &&
+      String(source?.city || "").trim() &&
+      String(source?.state || "").trim() &&
+      String(source?.zipCode || "").trim()
+  );
+}
+
 async function geocodeEventAddress(addressSource) {
   const { data, error } = await supabase.functions.invoke("geocode-address", {
     body: {
@@ -448,6 +460,44 @@ async function geocodeEventAddress(addressSource) {
   return {
     latitude: Number(data.latitude),
     longitude: Number(data.longitude),
+  };
+}
+
+async function resolveEventCoordinates(addressSource) {
+  try {
+    return {
+      ...(await geocodeEventAddress(addressSource)),
+      warning: "",
+    };
+  } catch (fullAddressError) {
+    console.warn("Full event address could not be geocoded:", fullAddressError);
+  }
+
+  if (
+    String(addressSource?.city || "").trim() &&
+    String(addressSource?.state || "").trim() &&
+    String(addressSource?.zipCode || "").trim()
+  ) {
+    try {
+      const zipCoordinates = await geocodeEventAddress({
+        city: addressSource.city,
+        state: addressSource.state,
+        zipCode: addressSource.zipCode,
+      });
+
+      return {
+        ...zipCoordinates,
+        warning: geocodeWarningMessage,
+      };
+    } catch (zipError) {
+      console.warn("Event ZIP/city/state could not be geocoded:", zipError);
+    }
+  }
+
+  return {
+    latitude: null,
+    longitude: null,
+    warning: geocodeWarningMessage,
   };
 }
 
@@ -2909,8 +2959,8 @@ async function saveFanProfileForm(event) {
       return;
     }
 
-    if (!form.title || !hasCompleteEventAddress(form) || !form.date || !form.time) {
-      alert("Fill out the event name, venue address, city, state, zip code, date, and time first.");
+    if (!form.title || !hasRequiredEventLocation(form) || !form.date || !form.time) {
+      alert("Fill out the event name, venue or address, city, state, zip code, date, and time first.");
       return;
     }
 
@@ -2928,14 +2978,9 @@ async function saveFanProfileForm(event) {
     const eventPriceLabel = form.isTicketed
       ? getEventPriceFromTicketTypes(form.ticketTypes)
       : "Free";
-    let coordinates;
-
-    try {
-      coordinates = await geocodeEventAddress(form);
-    } catch (error) {
-      console.error(error);
-      alert(geocodeErrorMessage);
-      return;
+    const coordinates = await resolveEventCoordinates(form);
+    if (coordinates.warning) {
+      alert(coordinates.warning);
     }
 
     let uploadedFlyer = {
@@ -3060,11 +3105,11 @@ async function saveFanProfileForm(event) {
 
     if (
       !editForm.title ||
-      !hasCompleteEventAddress(editForm) ||
+      !hasRequiredEventLocation(editForm) ||
       !editForm.date ||
       !editForm.time
     ) {
-      alert("Fill out the event name, venue address, city, state, zip code, date, and time first.");
+      alert("Fill out the event name, venue or address, city, state, zip code, date, and time first.");
       return;
     }
 
@@ -3084,11 +3129,17 @@ async function saveFanProfileForm(event) {
       !Number.isFinite(Number(coordinates.longitude))
     ) {
       try {
-        coordinates = await geocodeEventAddress(editForm);
+        coordinates = await resolveEventCoordinates(editForm);
+        if (coordinates.warning) {
+          alert(coordinates.warning);
+        }
       } catch (error) {
         console.error(error);
-        alert(geocodeErrorMessage);
-        return;
+        alert(geocodeWarningMessage);
+        coordinates = {
+          latitude: null,
+          longitude: null,
+        };
       }
     }
 
@@ -3280,7 +3331,7 @@ const visibleEvents =
     ? eventsWithDistance
         .filter(
           (event) =>
-            event.distanceMiles !== null && event.distanceMiles <= radiusMiles
+            event.distanceMiles === null || event.distanceMiles <= radiusMiles
         )
         .sort((firstEvent, secondEvent) => {
           if (firstEvent.distanceMiles === null) return 1;
